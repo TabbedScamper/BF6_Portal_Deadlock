@@ -1146,14 +1146,35 @@ Events.OnGameModeStarted.subscribe(() => {
     // Set spawn mode to auto spawn (must be done after game mode starts)
     mod.SetSpawnMode(mod.SpawnModes.AutoSpawn);
 
+    // SPECTATOR-BUG FIX (part 1): widen the spectate pool from own-SQUAD to own-TEAM so a
+    // dead player falls through to any living TEAMMATE when their spectate target dies
+    // (ownTeamOnly=true: NEVER the enemy team — no dead-player intel). Squad-scoped spectate
+    // with no target = the engine's "waiting for soldier deployment" UI-lock bug (community
+    // bug-report, hi-prio, no engine fix known). Whole-team-dead = elimination, which flips
+    // to the deploy screen immediately (part 3), so no-target spectate can't occur mid-round.
+    mod.SetSpectatingFiltersForAll(mod.SpectatingGroup.Team, false, true);
+
     // Deploy all players immediately
     mod.DeployAllPlayers();
 });
+
+// SPECTATOR-BUG FIX (part 2): during the round transition, undeployed players must sit on
+// the DEPLOY SCREEN — never the spectate flow. With everyone dead/frozen there can be no
+// spectate target, which wedges the engine ("waiting for soldier deployment" + cursor lock).
+// deployAllAtStartPositions() re-arms AutoSpawn right before DeployAllPlayers at round start,
+// so the force-deploy happens at ROUND START, not before round end.
+function enterRoundTransition(): void {
+    try {
+        mod.SetSpawnMode(mod.SpawnModes.Deploy);
+        adminDebugTool?.dynamicLog('Round transition: spawn mode -> Deploy (spectate suppressed)');
+    } catch {}
+}
 
 // Flag capture callbacks
 function handleFlagCapture(teamId: number): void {
     if (roundEnding) return;
     roundEnding = true;
+    enterRoundTransition();
 
     // Stop bot targeting when round ends
     if (ENABLE_CUSTOM_BOTS) {
@@ -1757,6 +1778,7 @@ function handleRoundTimeEnd(): void {
 
     // Trigger round end
     roundEnding = true;
+    enterRoundTransition();
 
     // Undeploy dead players, heal and freeze alive players
     const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
@@ -1920,6 +1942,7 @@ function checkRoundEnd(): void {
             team2Alive: team2Alive.length,
         });
         roundEnding = true;
+        enterRoundTransition();
 
         // Stop bot targeting when round ends
         if (ENABLE_CUSTOM_BOTS) {
@@ -2109,6 +2132,12 @@ function handlePlayerDeath(eventPlayer: mod.Player): void {
     const isFinalElimination = showEliminationEffect();
 
     if (isFinalElimination) {
+        // SPECTATOR-BUG FIX (part 3): the round is over but checkRoundEnd waits 1600ms for
+        // the elimination animation. The just-killed player would enter spectate NOW with
+        // (potentially) nobody left to watch — the exact engine-wedge trigger. Flip to the
+        // deploy screen immediately; checkRoundEnd's teardown follows after the animation.
+        enterRoundTransition();
+
         // Delay round end check to allow final elimination animation to play
         // Animation takes ~1600ms (shrink 200 + delay 300 + hold 800 + fade 300)
         Timers.setTimeout(() => {
@@ -2133,30 +2162,22 @@ Events.OnPlayerDied.subscribe((eventPlayer: mod.Player) => {
         resetBotBrain(eventPlayer);
     }
 
-    // Force deploy then undeploy after 2 seconds to kick out of spectator mode
-    Timers.setTimeout(() => {
-        try {
-            if (mod.IsPlayerValid(eventPlayer)) {
-                mod.DeployPlayer(eventPlayer);
-                mod.UndeployPlayer(eventPlayer);
-            }
-        } catch {}
-    }, 2000);
+    // SPECTATOR-BUG FIX (part 4): the old 2s DeployPlayer->UndeployPlayer "spectator kick"
+    // is REMOVED. It fired at unpredictable times (incl. mid-transition/countdown), ghost-
+    // spawned the player for a frame (also tripping the mid-round spawn blocker), and under
+    // SpawnModes.Spectating couldn't reach the deploy screen anyway. Team-wide spectate
+    // filters (part 1) + Deploy-mode transitions (parts 2/3) make the kick unnecessary.
 });
 
 Events.OnMandown.subscribe((eventPlayer: mod.Player) => {
     adminDebugTool?.dynamicLog('OnMandown event fired');
     handlePlayerDeath(eventPlayer);
 
-    // Force deploy then undeploy after 2 seconds to kick out of spectator mode
-    Timers.setTimeout(() => {
-        try {
-            if (mod.IsPlayerValid(eventPlayer)) {
-                mod.DeployPlayer(eventPlayer);
-                mod.UndeployPlayer(eventPlayer);
-            }
-        } catch {}
-    }, 2000);
+    // SPECTATOR-BUG FIX (part 4): the old 2s DeployPlayer->UndeployPlayer "spectator kick"
+    // is REMOVED. It fired at unpredictable times (incl. mid-transition/countdown), ghost-
+    // spawned the player for a frame (also tripping the mid-round spawn blocker), and under
+    // SpawnModes.Spectating couldn't reach the deploy screen anyway. Team-wide spectate
+    // filters (part 1) + Deploy-mode transitions (parts 2/3) make the kick unnecessary.
 });
 
 // Helper to get stats for a player (bot or human)
