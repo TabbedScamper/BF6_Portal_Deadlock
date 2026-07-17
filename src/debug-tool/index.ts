@@ -41,7 +41,7 @@ export class DebugTool {
                 message: mod.Message(mod.stringkeys.debugTool.buttons.toggleStaticLogger),
                 textSize: 20,
                 textColor: UI.COLORS.BF_GREEN_BRIGHT,
-                onClick: async (player: mod.Player): Promise<void> => {
+                onClickUp: async (player: mod.Player): Promise<void> => {
                     this._staticLogger.toggle();
                 },
             },
@@ -56,7 +56,7 @@ export class DebugTool {
                 message: mod.Message(mod.stringkeys.debugTool.buttons.toggleDynamicLogger),
                 textSize: 20,
                 textColor: UI.COLORS.BF_GREEN_BRIGHT,
-                onClick: async (player: mod.Player): Promise<void> => {
+                onClickUp: async (player: mod.Player): Promise<void> => {
                     this._dynamicLogger.toggle();
                 },
             },
@@ -71,7 +71,7 @@ export class DebugTool {
                 message: mod.Message(mod.stringkeys.debugTool.buttons.clearStaticLogger),
                 textSize: 20,
                 textColor: UI.COLORS.BF_GREEN_BRIGHT,
-                onClick: async (player: mod.Player): Promise<void> => {
+                onClickUp: async (player: mod.Player): Promise<void> => {
                     this._staticLogger.clear();
                 },
             },
@@ -86,7 +86,7 @@ export class DebugTool {
                 message: mod.Message(mod.stringkeys.debugTool.buttons.clearDynamicLogger),
                 textSize: 20,
                 textColor: UI.COLORS.BF_GREEN_BRIGHT,
-                onClick: async (player: mod.Player): Promise<void> => {
+                onClickUp: async (player: mod.Player): Promise<void> => {
                     this._dynamicLogger.clear();
                 },
             },
@@ -101,7 +101,7 @@ export class DebugTool {
                 message: mod.Message(mod.stringkeys.debugTool.buttons.close),
                 textSize: 20,
                 textColor: UI.COLORS.BF_RED_BRIGHT,
-                onClick: async (player: mod.Player): Promise<void> => {
+                onClickUp: async (player: mod.Player): Promise<void> => {
                     mod.EnableUIInputMode(false, player);
                     this._debugMenu.hide();
                 },
@@ -198,7 +198,7 @@ export class DebugTool {
             message: text,
             textSize: 20,
             textColor: UI.COLORS.BF_GREEN_BRIGHT,
-            onClick,
+            onClickUp: onClick,
             parent: this._debugMenu,
             receiver: this._player,
         });
