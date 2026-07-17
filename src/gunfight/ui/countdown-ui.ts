@@ -1,4 +1,5 @@
 import { Timers } from 'bf6-portal-utils/timers/index.ts';
+import { sfxVol } from '../../config.ts';
 import { UIContainer } from 'bf6-portal-utils/ui/components/container/index.ts';
 import { UIText } from 'bf6-portal-utils/ui/components/text/index.ts';
 import { LoadoutUI, type Loadout } from './loadout-ui.ts';
@@ -399,7 +400,7 @@ export class CountdownUI {
                         mod.CreateVector(0, 0, 0),
                         mod.CreateVector(0, 0, 0)
                     );
-                    mod.PlaySound(sfx, 0.5, player);
+                    mod.PlaySound(sfx, sfxVol(0.5), player);
                     Timers.setTimeout(() => {
                         try {
                             mod.StopSound(sfx);
@@ -730,7 +731,7 @@ export class CountdownUI {
             try {
                 if (mod.IsPlayerValid(player) && !mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) {
                     const sfx = mod.SpawnObject(sound, mod.CreateVector(0, 0, 0), mod.CreateVector(0, 0, 0));
-                    mod.PlaySound(sfx, 0.7, player);
+                    mod.PlaySound(sfx, sfxVol(0.7), player);
                     Timers.setTimeout(() => {
                         try {
                             mod.StopSound(sfx);

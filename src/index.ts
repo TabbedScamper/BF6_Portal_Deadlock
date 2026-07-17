@@ -5,7 +5,7 @@ import { MapDetector } from 'bf6-portal-utils/map-detector/index.ts';
 import { Vectors } from 'bf6-portal-utils/vectors/index.ts';
 
 import { DebugTool } from './debug-tool/index.ts';
-import { PLAYERS_PER_TEAM, DEBUG_MODE, DEBUG_TEAM_SIZE } from './config.ts';
+import { PLAYERS_PER_TEAM, DEBUG_MODE, DEBUG_TEAM_SIZE , sfxVol } from './config.ts';
 import {
     getPlayerStateVectorString,
     getPlayersOnTeam,
@@ -100,6 +100,10 @@ const BOT_MOVE_TOWARD_CHANCE = 0.3;
 // Chance to move toward flag when it spawns (80%)
 const BOT_FLAG_INTEREST_CHANCE = 0.8;
 // ============================================================================
+
+// Humans we've already announced with the join ping (per match; removed on leave so a
+// rejoin pings again). Prevents ping bursts on mass-redeploys each round.
+const knownHumanIds: Set<number> = new Set();
 
 let adminDebugTool: DebugTool | undefined;
 setRosterLogger((m) => adminDebugTool?.dynamicLog(m));
@@ -968,9 +972,11 @@ function cleanupCustomBots(): void {
 }
 
 // Audio volume config
-export const AUDIO_CONFIG = {
-    SFX_VOLUME: 0.5, // 50% volume for sound effects
-    VO_VOLUME: 1.0, // 100% volume for voice overs
+// Per-sound BASE volumes — multiplied by SFX_MASTER_VOLUME (config.ts) via sfxVol().
+// (The old AUDIO_CONFIG.VO_VOLUME was dead weight: PlayVO has no volume parameter.)
+const SFX_BASE = {
+    DEFAULT: 0.5,
+    JOIN_PING: 0.25, // was piercing — halved, and now only plays for genuinely NEW joiners
 };
 
 // Sound effects
@@ -985,10 +991,15 @@ const SOUNDS = {
 };
 
 // Helper to play 2D sound for a player (exported for use in other modules)
-export function playSound(player: mod.Player, sound: mod.RuntimeSpawn_Common, duration: number = 5000): void {
+export function playSound(
+    player: mod.Player,
+    sound: mod.RuntimeSpawn_Common,
+    duration: number = 5000,
+    baseVolume: number = SFX_BASE.DEFAULT
+): void {
     try {
         const sfx = mod.SpawnObject(sound, mod.CreateVector(0, 0, 0), mod.CreateVector(0, 0, 0));
-        mod.PlaySound(sfx, AUDIO_CONFIG.SFX_VOLUME, player);
+        mod.PlaySound(sfx, sfxVol(baseVolume), player);
         Timers.setTimeout(() => {
             try {
                 mod.StopSound(sfx);
@@ -1029,32 +1040,45 @@ export function playVO(event: mod.VoiceOverEvents2D, target?: mod.Player | mod.T
 }
 
 // Play round win/loss VOs based on round progress (early/mid/late)
-function playRoundProgressVO(winningTeamId: number): void {
-    const winningTeam = mod.GetTeam(winningTeamId);
-    const losingTeamId = winningTeamId === 1 ? 2 : 1;
-    const losingTeam = mod.GetTeam(losingTeamId);
+// VO-SCOPING FIX (harness-sound research): team-relative VO lines (winning/losing,
+// objective friendly/enemy) can be SILENT when not scoped to a player — the working
+// recipe is a fresh VO module per call (playVO does this) played TO EACH PLAYER.
+// Team-object targets are what broke "enemy/friendly is taking the objective" in overtime.
+function playVOToTeam(event: mod.VoiceOverEvents2D, teamId: number): void {
+    for (const p of getPlayersOnTeam(teamId)) {
+        try {
+            if (mod.IsPlayerValid(p) && !mod.GetSoldierState(p, mod.SoldierStateBool.IsAISoldier)) {
+                playVO(event, p);
+            }
+        } catch {}
+    }
+}
 
-    // Determine progress stage based on round number
-    // Early: rounds 1-4, Mid: rounds 5-8, Late: rounds 9-11
+function playRoundProgressVO(): void {
+    // SEMANTICS FIX: these are MATCH-progress lines ("we're winning/losing"), so they must
+    // follow the SCORE, not the round result — a team down 1-4 that takes a round is still
+    // losing the match. Called after showResult() so scores are fresh. Tied match: no line.
+    const scores = getScores();
+    if (scores.team1 === scores.team2) return;
+    const aheadId = scores.team1 > scores.team2 ? 1 : 2;
+    const behindId = aheadId === 1 ? 2 : 1;
+
+    // Progress stage by round number — Early: 1-4, Mid: 5-8, Late: 9+
     let winningVO: mod.VoiceOverEvents2D;
     let losingVO: mod.VoiceOverEvents2D;
-
     if (roundNumber <= 4) {
-        // Early game
         winningVO = mod.VoiceOverEvents2D.ProgressEarlyWinning;
         losingVO = mod.VoiceOverEvents2D.ProgressEarlyLosing;
     } else if (roundNumber <= 8) {
-        // Mid game
         winningVO = mod.VoiceOverEvents2D.ProgressMidWinning;
         losingVO = mod.VoiceOverEvents2D.ProgressMidLosing;
     } else {
-        // Late game
         winningVO = mod.VoiceOverEvents2D.ProgressLateWinning;
         losingVO = mod.VoiceOverEvents2D.ProgressLateLosing;
     }
 
-    playVO(winningVO, winningTeam);
-    playVO(losingVO, losingTeam);
+    playVOToTeam(winningVO, aheadId);
+    playVOToTeam(losingVO, behindId);
 }
 
 export function getCurrentRoundNumber(): number {
@@ -1197,7 +1221,7 @@ function finishRound(isDraw: boolean, winningTeam: number, showResult: () => voi
     flagCaptureUI?.hide();
     showResult();
     if (!isDraw) {
-        playRoundProgressVO(winningTeam);
+        playRoundProgressVO();
     }
 
     // Match-win check IMMEDIATELY after score update (draws never end the match)
@@ -1282,20 +1306,17 @@ function handleResumeCountdown(): void {
 }
 
 function handlePlayCaptureVO(capturingTeamId: number): void {
-    // Play ObjectiveCapturing to the capturing team (friendly)
-    const capturingTeam = mod.GetTeam(capturingTeamId);
-    playVO(mod.VoiceOverEvents2D.ObjectiveCapturing, capturingTeam);
-
-    // Play ObjectiveContested to the other team (enemy)
+    // "We're taking the objective" to the capturing team; "objective contested/being
+    // taken" to the defenders. Per-player scoped (team-object targets were silent).
+    playVOToTeam(mod.VoiceOverEvents2D.ObjectiveCapturing, capturingTeamId);
     const otherTeamId = capturingTeamId === 1 ? 2 : 1;
-    const otherTeam = mod.GetTeam(otherTeamId);
-    playVO(mod.VoiceOverEvents2D.ObjectiveContested, otherTeam);
+    playVOToTeam(mod.VoiceOverEvents2D.ObjectiveContested, otherTeamId);
 }
 
 function handlePlayContestedVO(): void {
-    // Play ObjectiveContested to both teams when flag becomes contested
-    playVO(mod.VoiceOverEvents2D.ObjectiveContested, mod.GetTeam(1));
-    playVO(mod.VoiceOverEvents2D.ObjectiveContested, mod.GetTeam(2));
+    // Both teams on the flag: contested for everyone. Per-player scoped.
+    playVOToTeam(mod.VoiceOverEvents2D.ObjectiveContested, 1);
+    playVOToTeam(mod.VoiceOverEvents2D.ObjectiveContested, 2);
 }
 
 function handleOvertimeStart(): void {
@@ -1531,14 +1552,20 @@ function handlePlayerDeployed(player: mod.Player): void {
     const isHuman = !mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier);
 
     if (isHuman) {
-        // Play player join sound for all human players
-        const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
-        for (const p of allPlayers) {
-            try {
-                if (mod.IsPlayerValid(p) && !mod.GetSoldierState(p, mod.SoldierStateBool.IsAISoldier)) {
-                    playSound(p, SOUNDS.PLAYER_JOIN);
-                }
-            } catch {}
+        // JOIN-PING FIX: this used to fire for EVERY human deploy — mass-deploys (match
+        // start + every round transition) played N pings to N listeners at once, which is
+        // the "very loud pings at the start of the match". Ping once per NEW human only.
+        const isNewHuman = !knownHumanIds.has(playerId);
+        if (isNewHuman) {
+            knownHumanIds.add(playerId);
+            const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+            for (const p of allPlayers) {
+                try {
+                    if (mod.IsPlayerValid(p) && !mod.GetSoldierState(p, mod.SoldierStateBool.IsAISoldier)) {
+                        playSound(p, SOUNDS.PLAYER_JOIN, 5000, SFX_BASE.JOIN_PING);
+                    }
+                } catch {}
+            }
         }
 
         // Undeploy a bot from this player's team to make room
@@ -1648,8 +1675,8 @@ function startRound(): void {
     const scores = getScores();
     if (scores.team1 === 5 || scores.team2 === 5) {
         // Play match point VO for the team that's at match point
-        const matchPointTeam = mod.GetTeam(scores.team1 === 5 ? 1 : 2);
-        playVO(mod.VoiceOverEvents2D.RoundLastRound, matchPointTeam);
+        const matchPointTeamId = scores.team1 === 5 ? 1 : 2;
+        playVOToTeam(mod.VoiceOverEvents2D.RoundLastRound, matchPointTeamId);
         adminDebugTool?.dynamicLog(`Match point for team ${scores.team1 === 5 ? 1 : 2}!`);
     }
 
@@ -2189,6 +2216,7 @@ Events.OnPlayerLeaveGame.subscribe(destroyAdminDebugTool);
 
 // Play leave sound when a human player leaves (not bots)
 Events.OnPlayerLeaveGame.subscribe((playerId: number) => {
+    knownHumanIds.delete(playerId);
     // Skip sound for bots
     if (knownBotIds.has(playerId)) {
         knownBotIds.delete(playerId); // Clean up tracking

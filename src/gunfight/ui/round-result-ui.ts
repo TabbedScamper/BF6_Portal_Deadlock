@@ -1,4 +1,5 @@
 import { Timers } from 'bf6-portal-utils/timers/index.ts';
+import { sfxVol } from '../../config.ts';
 import { UIContainer } from 'bf6-portal-utils/ui/components/container/index.ts';
 import { UIText } from 'bf6-portal-utils/ui/components/text/index.ts';
 import { getAllPlayers } from '../../helpers/index.ts';
@@ -134,7 +135,7 @@ function showRoundResult(
         try {
             const sound = isWin ? ROUND_WIN_SOUND : ROUND_LOSS_SOUND;
             const sfx = mod.SpawnObject(sound, mod.CreateVector(0, 0, 0), mod.CreateVector(0, 0, 0));
-            mod.PlaySound(sfx, 0.5, player);
+            mod.PlaySound(sfx, sfxVol(0.5), player);
             Timers.setTimeout(() => {
                 try {
                     mod.StopSound(sfx);
@@ -681,7 +682,7 @@ function showRoundDrawResult(player: mod.Player): void {
         // Play loss sound for draw (neutral outcome)
         try {
             const sfx = mod.SpawnObject(ROUND_LOSS_SOUND, mod.CreateVector(0, 0, 0), mod.CreateVector(0, 0, 0));
-            mod.PlaySound(sfx, 0.5, player);
+            mod.PlaySound(sfx, sfxVol(0.5), player);
             Timers.setTimeout(() => {
                 try {
                     mod.StopSound(sfx);

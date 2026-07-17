@@ -87,6 +87,16 @@ Telemetry to watch in PortalLog (`[EVT] team.reconcile`, `[EVT] team.moveHuman`)
 10. A player who deploys DURING the pre-round countdown gets the full HUD for that round
     (team health bars, round timer, score ticks) — previously they had none until next round.
 
+**Audio pass (SFX master volume + VO fixes):**
+11. Overall SFX noticeably quieter/leveled (one knob: `SFX_MASTER_VOLUME` in src/config.ts,
+    default 0.6) while announcer VO is unchanged — VO should now stand out. Join ping plays
+    ONCE per genuinely new player (quieter), NOT a burst at match start / every round.
+12. OVERTIME VO BUG: when someone stands on the flag, the capturing team hears "taking the
+    objective" and defenders hear "contested" — every player, every time (was silent).
+    Both teams hear contested when the flag is disputed.
+13. "We're winning/losing" progress VO after each round now follows the MATCH SCORE (a team
+    behind 1-4 that wins a round hears LOSING, not winning). Tied score = no progress line.
+
 ## Repo notes
 
 - Repo: [TabbedScamper/BF6_Portal_Deadlock](https://github.com/TabbedScamper/BF6_Portal_Deadlock) (`origin`); deluca's template kept as the `template` remote for pulling template updates.

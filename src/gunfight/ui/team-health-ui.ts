@@ -3,7 +3,7 @@ import { UIContainer } from 'bf6-portal-utils/ui/components/container/index.ts';
 import { UIText } from 'bf6-portal-utils/ui/components/text/index.ts';
 import { getPlayersOnTeam, rejectedPlayerIds } from '../../helpers/index.ts';
 import { playVO } from '../../index.ts';
-import { PLAYERS_PER_TEAM } from '../../config.ts';
+import { PLAYERS_PER_TEAM, sfxVol } from '../../config.ts';
 import { getScores } from './round-result-ui.ts';
 
 // ========== DEBUG LOGGING ==========
@@ -719,7 +719,7 @@ export class TeamHealthUI {
             try {
                 if (mod.IsPlayerValid(player) && !mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) {
                     const sfx = mod.SpawnObject(sound, mod.CreateVector(0, 0, 0), mod.CreateVector(0, 0, 0));
-                    mod.PlaySound(sfx, 0.7, player);
+                    mod.PlaySound(sfx, sfxVol(0.7), player);
                     Timers.setTimeout(() => {
                         try {
                             mod.StopSound(sfx);

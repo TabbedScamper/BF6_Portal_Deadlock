@@ -23,3 +23,17 @@ export const DEBUG_MODE = false;
 // In debug mode, force this many seats per team (fills with bots) so there's a
 // full match to test against solo. Ignored when DEBUG_MODE is false.
 export const DEBUG_TEAM_SIZE = PLAYERS_PER_TEAM;
+
+// ============================================================================
+// AUDIO — MASTER SFX VOLUME
+// ============================================================================
+// ONE knob for every sound effect in the mode: all PlaySound call sites route
+// their per-sound BASE volume through sfxVol(base) = base * SFX_MASTER_VOLUME.
+// NOTE: the SDK's PlayVO has NO volume parameter — announcer/VO loudness is
+// engine-fixed. Lowering this master is what makes the VO lines stand out.
+// ============================================================================
+export const SFX_MASTER_VOLUME = 0.6;
+
+export function sfxVol(base: number = 1.0): number {
+    return base * SFX_MASTER_VOLUME;
+}
