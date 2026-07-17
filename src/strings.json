@@ -197,7 +197,11 @@
                 "backupplan": "BACKUP PLAN",
                 "doublejeopardy": "DOUBLE JEOPARDY",
                 "spaceprogram": "SPACE PROGRAM",
-                "lastresort": "LAST RESORT"
+                "lastresort": "LAST RESORT",
+                "nothingpersonal": "NOTHING PERSONAL",
+                "thebailiff": "THE BAILIFF",
+                "cardioday": "CARDIO DAY",
+                "angermanagement": "ANGER MANAGEMENT"
             }
         }
     },

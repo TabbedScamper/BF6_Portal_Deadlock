@@ -971,6 +971,73 @@ const SIGNATURE_LOADOUTS: SignatureLoadout[] = [
         throwable: G.Throwable_Incendiary_Grenade,
         throwableName: SK.throwables.incendiary,
     },
+    // -------- PRIMARY-ONLY kits (secondary: null — one gun, no fallback) --------
+    {
+        // NOTHING PERSONAL — a suppressed bolt gun and nothing to fall back on. Make it count.
+        primary: W.Sniper_SV_98,
+        primaryAttachments: [
+            A.Scope_TS_HD_600x,
+            A.Scope_Canted_Iron_Sights,
+            A.Muzzle_Long_Suppressor,
+            A.Barrel_650mm_Fluted,
+            A.Magazine_10rnd_Magazine,
+        ],
+        primaryName: SK.custom.nothingpersonal,
+        secondary: null,
+        secondaryName: SK.throwables.none,
+        gadget: G.Class_Adrenaline_Injector,
+        gadgetName: SK.gadgets.stim,
+        throwable: G.Throwable_Throwing_Knife,
+        throwableName: SK.throwables.throwing_knife,
+    },
+    {
+        // THE BAILIFF — order in the court. Pump, flash, repeat until compliant.
+        primary: W.Shotgun_M87A1,
+        primaryAttachments: [A.Scope_Iron_Sights, A.Bottom_Full_Angled, A.Left_Flashlight],
+        primaryName: SK.custom.thebailiff,
+        secondary: null,
+        secondaryName: SK.throwables.none,
+        gadget: G.Class_Adrenaline_Injector,
+        gadgetName: SK.gadgets.stim,
+        throwable: G.Throwable_Flash_Grenade,
+        throwableName: SK.throwables.flash,
+    },
+    {
+        // CARDIO DAY — an SGX, a stim, and absolutely no plan B. Keep moving.
+        primary: W.SMG_SGX,
+        primaryAttachments: [
+            A.Scope_Aperture_Sight,
+            A.Muzzle_CQB_Suppressor,
+            A.Barrel_6_Fluted,
+            A.Magazine_30rnd_Fast_Mag,
+            A.Ammo_Hollow_Point,
+        ],
+        primaryName: SK.custom.cardioday,
+        secondary: null,
+        secondaryName: SK.throwables.none,
+        gadget: G.Class_Adrenaline_Injector,
+        gadgetName: SK.gadgets.stim,
+        throwable: G.Throwable_Smoke_Grenade,
+        throwableName: SK.throwables.smoke,
+    },
+    {
+        // ANGER MANAGEMENT — 100 rounds of unresolved feelings. Therapy is Tuesday.
+        primary: W.LMG_M123K,
+        primaryAttachments: [
+            A.Scope_SU_123_150x,
+            A.Muzzle_Double_port_Brake,
+            A.Barrel_612mm_VMW,
+            A.Magazine_100rnd_Belt_Pouch,
+            A.Bottom_Bipod,
+        ],
+        primaryName: SK.custom.angermanagement,
+        secondary: null,
+        secondaryName: SK.throwables.none,
+        gadget: G.Misc_Demolition_Charge,
+        gadgetName: SK.gadgets.c4,
+        throwable: G.Throwable_Mini_Frag_Grenade,
+        throwableName: SK.throwables.mini_frag,
+    },
 ];
 let remainingSignatures: SignatureLoadout[] = [];
 
@@ -979,9 +1046,9 @@ let remainingSignatures: SignatureLoadout[] = [];
 // Secondary, gadget, and throwable are always randomized
 // Custom secondaries always keep secondary even with launcher, stock secondaries removed with launcher
 export function getRandomLoadout(): Loadout {
-    // 18% — a SIGNATURE loadout: a full themed kit (fixed primary/secondary/gadget/throwable),
-    // including the pistol-only duels (primary: null).
-    if (Math.random() < 0.18) {
+    // 20% — a SIGNATURE loadout: a full themed kit (fixed primary/secondary/gadget/throwable),
+    // including the pistol-only duels (primary: null) and primary-only kits (secondary: null).
+    if (Math.random() < 0.2) {
         const sig = pickFromBag(remainingSignatures, SIGNATURE_LOADOUTS);
         return {
             primary: sig.primary,
