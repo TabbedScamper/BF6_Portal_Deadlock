@@ -1158,15 +1158,40 @@ Events.OnGameModeStarted.subscribe(() => {
     mod.DeployAllPlayers();
 });
 
-// SPECTATOR-BUG FIX (part 2): during the round transition, undeployed players must sit on
-// the DEPLOY SCREEN — never the spectate flow. With everyone dead/frozen there can be no
-// spectate target, which wedges the engine ("waiting for soldier deployment" + cursor lock).
-// deployAllAtStartPositions() re-arms AutoSpawn right before DeployAllPlayers at round start,
-// so the force-deploy happens at ROUND START, not before round end.
+// SPECTATOR-BUG FIX (part 2): the engine wedges ("waiting for soldier deployment" + cursor
+// lock) when a spectating player has NO valid spectate target. During the round transition we
+// therefore WIDEN the spectate pool to everyone — dead players fall through to the frozen
+// winners behind the round-result overlay (round is decided; no live intel). startRound()
+// restores team-only spectate before play resumes. NOTE: players never see the deploy screen —
+// spawn mode stays Spectating; round start force-deploys via AutoSpawn + DeployAllPlayers.
 function enterRoundTransition(): void {
     try {
-        mod.SetSpawnMode(mod.SpawnModes.Deploy);
-        adminDebugTool?.dynamicLog('Round transition: spawn mode -> Deploy (spectate suppressed)');
+        mod.SetSpectatingFiltersForAll(mod.SpectatingGroup.All, false, false);
+
+        // Mutual wipe: NOBODY is alive, so even the widened pool has no target — the one
+        // case spectate cannot be made safe. Force-redeploy everyone (AutoSpawn — no deploy
+        // screen), slightly delayed so the teardown's undeploys settle first; the next
+        // round's countdown then teleports + freezes them into position.
+        const anyAlive = getAlivePlayersOnTeam(1).length + getAlivePlayersOnTeam(2).length > 0;
+        if (!anyAlive) {
+            adminDebugTool?.dynamicLog('Round transition: mutual wipe -> force redeploy (AutoSpawn)');
+            Timers.setTimeout(() => {
+                try {
+                    if (matchEnding) return;
+                    mod.SetSpawnMode(mod.SpawnModes.AutoSpawn);
+                    mod.DeployAllPlayers();
+                } catch {}
+            }, 600);
+            Timers.setTimeout(() => {
+                try {
+                    if (matchEnding) return;
+                    const everyone = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+                    countdownUI?.freezeAllPlayers(everyone);
+                } catch {}
+            }, 1200);
+        } else {
+            adminDebugTool?.dynamicLog('Round transition: spectate pool widened (frozen players only)');
+        }
     } catch {}
 }
 
@@ -1649,6 +1674,12 @@ function startRound(): void {
 
     // Reset round ending flag
     roundEnding = false;
+
+    // SPECTATOR-BUG FIX: restore team-only spectate for live play (transition widened it to
+    // All so dead players always had a target; live rounds must never show the enemy team).
+    try {
+        mod.SetSpectatingFiltersForAll(mod.SpectatingGroup.Team, false, true);
+    } catch {}
 
     // Initialize spawn positions from spatial objects
     initSpawnPositions();
@@ -2133,9 +2164,10 @@ function handlePlayerDeath(eventPlayer: mod.Player): void {
 
     if (isFinalElimination) {
         // SPECTATOR-BUG FIX (part 3): the round is over but checkRoundEnd waits 1600ms for
-        // the elimination animation. The just-killed player would enter spectate NOW with
-        // (potentially) nobody left to watch — the exact engine-wedge trigger. Flip to the
-        // deploy screen immediately; checkRoundEnd's teardown follows after the animation.
+        // the elimination animation. The just-killed player's spectate engages in this window
+        // with (potentially) nobody on their team left to watch — the exact engine-wedge
+        // trigger. Widen the spectate pool NOW (and handle mutual wipes) so a target exists
+        // by the time spectate engages; checkRoundEnd's teardown follows after the animation.
         enterRoundTransition();
 
         // Delay round end check to allow final elimination animation to play
