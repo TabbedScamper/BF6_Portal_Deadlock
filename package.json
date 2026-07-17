@@ -1,9 +1,9 @@
 {
-    "name": "bf6-portal-scripting-template",
+    "name": "bf6-deadlock",
     "experienceName": "Scripting Template",
     "version": "1.6.0",
     "type": "module",
-    "description": "Scripting template for Battlefield 6 Portal (use \"Use this template\" on GitHub to create a new project)",
+    "description": "Deadlock - round-based gunfight mode (1v1 to 4v4) with sense-think-act bot AI, dynamic squad-aware team sorting, and full custom UI. Built on deluca-mike's bf6-portal-scripting-template.",
     "engines": {
         "node": ">=24.0.0"
     },

@@ -6,3 +6,5 @@ package-lock.json
 .DS_Store
 .env
 extension/build
+PortalLog.txt
+Portal-Logs.lnk
