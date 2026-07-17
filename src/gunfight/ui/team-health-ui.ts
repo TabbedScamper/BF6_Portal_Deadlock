@@ -680,7 +680,9 @@ export class TeamHealthUI {
                     this._countdownMs = 10 * 1000; // Add 10 seconds
                     this._lastBeepSecond = -1; // Reset beep tracking for overtime
                     this._setCountdownColor(TEAM_HEALTH_COLORS.RED);
-                    playVO(mod.VoiceOverEvents2D.TimeLow);
+                    // Per-receiver: every instance hits overtime at the same tick; without a
+                    // target each would fire a global TimeLow VO (N humans = N stacked VOs).
+                    playVO(mod.VoiceOverEvents2D.TimeLow, this._receiver);
                     // Notify that overtime has started
                     if (this._onOvertimeStart) {
                         this._onOvertimeStart();
@@ -706,8 +708,14 @@ export class TeamHealthUI {
 
     private _playCountdownTick(isFinal: boolean): void {
         const sound = isFinal ? OVERTIME_FINAL_SOUND : OVERTIME_TICK_SOUND;
-        const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
-        for (const player of allPlayers) {
+        // Every human player has their OWN TeamHealthUI instance, and every instance runs
+        // this countdown — so each instance must beep ONLY for its own receiver. The old
+        // all-players loop made every instance beep to everyone: N humans = N stacked
+        // ticks per player per second during overtime.
+        const targets = this._receiver
+            ? [this._receiver]
+            : [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)]; // global-UI fallback (unused in practice)
+        for (const player of targets) {
             try {
                 if (mod.IsPlayerValid(player) && !mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) {
                     const sfx = mod.SpawnObject(sound, mod.CreateVector(0, 0, 0), mod.CreateVector(0, 0, 0));

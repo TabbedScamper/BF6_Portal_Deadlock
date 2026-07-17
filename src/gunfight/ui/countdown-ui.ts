@@ -541,6 +541,19 @@ export class CountdownUI {
 
         // Apply weapons only (gadgets given when countdown ends)
         LoadoutUI.applyWeaponsToPlayer(player, loadout);
+
+        // LATE-JOINER FIX: give them their own TeamHealthUI (previously missing — a
+        // countdown joiner played the whole round with no health bars/round timer).
+        // Rosters are fetched dynamically by the UI, and the show()/startCountdown(40)
+        // loops at countdown end iterate the map, so this instance is fully wired in.
+        try {
+            const lateId = mod.GetObjId(player);
+            if (!mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier) && !this._teamHealthUIs.has(lateId)) {
+                const ui = new TeamHealthUI(player);
+                ui.setTeams([], []); // args unused (dynamic rosters); triggers local-team color detect
+                this._teamHealthUIs.set(lateId, ui);
+            }
+        } catch {}
     }
 
     public freezeAllPlayers(players: mod.Player[]): void {
