@@ -97,6 +97,13 @@ Telemetry to watch in PortalLog (`[EVT] team.reconcile`, `[EVT] team.moveHuman`)
 13. "We're winning/losing" progress VO after each round now follows the MATCH SCORE (a team
     behind 1-4 that wins a round hears LOSING, not winning). Tied score = no progress line.
 
+**Arsenal overhaul (fixed cards + named weapons + signature loadouts):**
+14. Custom cards show their new names (THE LONG GOODBYE, OFFICE MEMO, THE LANDLORD, ...) and
+    every gun's attachments actually appear on the weapon (the old wrong-family barrels/mags
+    silently failed). Watch for the ~15% SIGNATURE kits (PIZZA RUSH, DEMOLITION DAY, WALL
+    STREET, BRITISH BREAKFAST...) - full themed primary+secondary+gadget+throwable combos.
+    Variety check: with 28 custom primaries + 8 signatures the rotation should feel fresh.
+
 ## Repo notes
 
 - Repo: [TabbedScamper/BF6_Portal_Deadlock](https://github.com/TabbedScamper/BF6_Portal_Deadlock) (`origin`); deluca's template kept as the `template` remote for pulling template updates.
