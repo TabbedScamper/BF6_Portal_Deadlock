@@ -24,7 +24,7 @@
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/deluca-mike/bf6-portal-scripting-template.git"
+        "url": "git+https://github.com/TabbedScamper/BF6_Portal_Deadlock.git"
     },
     "keywords": [
         "template",

@@ -57,5 +57,5 @@ Telemetry to watch in PortalLog (`[EVT] team.reconcile`, `[EVT] team.moveHuman`)
 
 ## Repo notes
 
-- `origin` still points at deluca's template repo — **don't push**; this is a local working repo.
+- Repo: [TabbedScamper/BF6_Portal_Deadlock](https://github.com/TabbedScamper/BF6_Portal_Deadlock) (`origin`); deluca's template kept as the `template` remote for pulling template updates.
 - `spatials/` + `pages/` are template-standard; `Deadlock.png/.jpg` are the mode art/thumbnail.
