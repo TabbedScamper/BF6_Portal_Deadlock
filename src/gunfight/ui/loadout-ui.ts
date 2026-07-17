@@ -1,7 +1,7 @@
 import { Timers } from 'bf6-portal-utils/timers/index.ts';
 import { UIContainer } from 'bf6-portal-utils/ui/components/container/index.ts';
 import { UIText } from 'bf6-portal-utils/ui/components/text/index.ts';
-import { getStockAttachments } from '../../index.ts';
+import { getStockAttachments } from '../loadout.ts';
 
 // ========== DEBUG LOGGING ==========
 const DEBUG_LOADOUT = false;
