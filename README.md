@@ -75,6 +75,18 @@ Telemetry to watch in PortalLog (`[EVT] team.reconcile`, `[EVT] team.moveHuman`)
    (isHealthWin), flag-capture result, draws (tied health + mutual wipe), side swaps every 3
    rounds, match end at 6 wins.
 
+**Elimination counter fix:**
+8. First kill of a 1v1 round animates 1v1 -> 1v0 (NOT 4v4 -> 1v0); a 3v3 shows 3v3 -> 3v2.
+   Spam-kills in quick succession produce no UI errors/stacking.
+
+**Overtime sound fix (was stacking with player count):**
+9. With 2+ humans: overtime tick beeps and the "time low" VO play ONCE per player (previously
+   N humans = N stacked beeps/VOs — got louder with bigger lobbies).
+
+**Late-joiner UI fix:**
+10. A player who deploys DURING the pre-round countdown gets the full HUD for that round
+    (team health bars, round timer, score ticks) — previously they had none until next round.
+
 ## Repo notes
 
 - Repo: [TabbedScamper/BF6_Portal_Deadlock](https://github.com/TabbedScamper/BF6_Portal_Deadlock) (`origin`); deluca's template kept as the `template` remote for pulling template updates.
