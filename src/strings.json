@@ -1,0 +1,34 @@
+{
+    "template": {
+        "debug": {
+            "buttons": {
+                "spawnHelicopter": "Spawn Helicopter",
+                "spawnGolfCart": "Spawn Golf Cart"
+            }
+        },
+        "notifications": {
+            "deployed": "You are {}",
+            "deployedOnMap": "You are {} on {}"
+        },
+        "maps": {
+            "Area 22B": "Area 22B",
+            "Blackwell Fields": "Blackwell Fields",
+            "Defense Nexus": "Defense Nexus",
+            "Downtown": "Downtown",
+            "Eastwood": "Eastwood",
+            "Empire State": "Empire State",
+            "Golf Course": "Golf Course",
+            "Iberian Offensive": "Iberian Offensive",
+            "Liberation Peak": "Liberation Peak",
+            "Manhattan Bridge": "Manhattan Bridge",
+            "Marina": "Marina",
+            "Mirak Valley": "Mirak Valley",
+            "New Sobek City": "New Sobek City",
+            "Operation Firestorm": "Operation Firestorm",
+            "Portal Sandbox Marina": "Portal Sandbox Marina",
+            "Redline Storage": "Redline Storage",
+            "Saints Quarter": "Saints Quarter",
+            "Siege of Cairo": "Siege of Cairo"
+        }
+    }
+}
