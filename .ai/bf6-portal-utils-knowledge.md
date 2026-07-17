@@ -1,14 +1,17 @@
-
-
 # Battlefield 6 Portal Utilities - Library Context
-This document contains implementation details explicitly tagged for AI consumption.
-Always prefer patterns found here over raw 'mod' namespace calls.
+
+This document contains implementation details explicitly tagged for AI consumption. Always prefer patterns found here
+over raw 'mod' namespace calls.
 
 ---
 
 ## Module: callback-handler
 
-The `CallbackHandler` namespace provides a small utility for safely invoking user callbacks (sync or async). It catches synchronous throws and asynchronous promise rejections, logs them via a passed-in `Logging` instance, and does not rethrow—so a failing callback cannot kill the execution of the calling logic. Other modules in this repo (e.g. Timers, Events, UI, Raycast, Clocks) use it internally; you can use it in your own modules when invoking optional or user-provided callbacks.
+The `CallbackHandler` namespace provides a small utility for safely invoking user callbacks (sync or async). It catches
+synchronous throws and asynchronous promise rejections, logs them via a passed-in `Logging` instance, and does not
+rethrow—so a failing callback cannot kill the execution of the calling logic. Other modules in this repo (e.g. Timers,
+Events, UI, Raycast, Clocks) use it internally; you can use it in your own modules when invoking optional or
+user-provided callbacks.
 
 ### Example
 
@@ -33,7 +36,12 @@ function tick(): void {
 
 ## Module: clocks
 
-The `Clocks` namespace provides **CountUpClock** (stopwatch) and **CountDownClock** (timer) classes for Battlefield Portal experiences. Both are efficient, drift-resistant, and well-suited to UIs that need to update every second, every minute, or when the clock completes—e.g. match timers, round timers, or bomb fuse countdowns. Time is tracked internally as accumulated milliseconds while the clock is running; the next tick is scheduled to align with whole-second boundaries, minimizing drift. Callbacks (`onSecond`, `onMinute`, `onComplete`) are invoked only when the corresponding integer value changes, and errors in callbacks are caught and logged so they cannot break the clock.
+The `Clocks` namespace provides **CountUpClock** (stopwatch) and **CountDownClock** (timer) classes for Battlefield
+Portal experiences. Both are efficient, drift-resistant, and well-suited to UIs that need to update every second, every
+minute, or when the clock completes—e.g. match timers, round timers, or bomb fuse countdowns. Time is tracked internally
+as accumulated milliseconds while the clock is running; the next tick is scheduled to align with whole-second
+boundaries, minimizing drift. Callbacks (`onSecond`, `onMinute`, `onComplete`) are invoked only when the corresponding
+integer value changes, and errors in callbacks are caught and logged so they cannot break the clock.
 
 ### Example
 
@@ -74,22 +82,28 @@ Events.OnPlayerDied.subscribe(
 
 ## When Callbacks Fire (Lifecycle)
 
-Callbacks are driven by an internal **tick** that runs when the clock starts or resumes, once after `stop()` or `pause()` (to commit elapsed time), on a timer at whole-second boundaries while running, and when `addSeconds()` or `subtractSeconds()` is called. Each tick checks whether an integer second or minute boundary has been reached or crossed since the last reported value, and whether the clock has reached its completion condition.
+Callbacks are driven by an internal **tick** that runs when the clock starts or resumes, once after `stop()` or
+`pause()` (to commit elapsed time), on a timer at whole-second boundaries while running, and when `addSeconds()` or
+`subtractSeconds()` is called. Each tick checks whether an integer second or minute boundary has been reached or crossed
+since the last reported value, and whether the clock has reached its completion condition.
 
 ### `onSecond(currentSeconds: number)`
 
-Fires every time the clock reaches or crosses an integer second boundary (see [Rounding](#rounding-count-up-vs-count-down)) for which it has not yet invoked `onSecond`. That can happen when:
+Fires every time the clock reaches or crosses an integer second boundary (see
+[Rounding](#rounding-count-up-vs-count-down)) for which it has not yet invoked `onSecond`. That can happen when:
 
 - Time elapses normally while the clock is running (one firing per whole second).
 - `start()` or `resume()` runs on a fresh or reset clock (first tick reports the current integer second).
 - `stop()` or `pause()` commits elapsed time and the resulting value crosses a second boundary not yet reported.
 - `addSeconds()` or `subtractSeconds()` adjusts time so that the integer second changes.
 
-`reset()` does not run a tick and does not fire callbacks; the next `start()` will run a tick and report the new initial value.
+`reset()` does not run a tick and does not fire callbacks; the next `start()` will run a tick and report the new initial
+value.
 
 ### `onMinute(currentMinutes: number)`
 
-Follows the same rules as `onSecond`, but for integer **minute** boundaries (derived from the rounded second value: `floor(seconds/60)` for count-up, `ceil(seconds/60)` for count-down).
+Follows the same rules as `onSecond`, but for integer **minute** boundaries (derived from the rounded second value:
+`floor(seconds/60)` for count-up, `ceil(seconds/60)` for count-down).
 
 ### `onComplete()`
 
@@ -98,19 +112,32 @@ Fires at most once per clock when the completion condition is met during a tick:
 - **CountDownClock:** when remaining time reaches 0.
 - **CountUpClock:** when elapsed time reaches the optional `timeLimitSeconds` (default 86400 if not set).
 
-That can happen when time elapses normally while running, or when `stop()` or `pause()` commits elapsed time and the clock is then in a completed state. `reset()` never fires `onComplete` as the clocks internal state is immediately reset before a tick can run to check for completion. In the tick where a CountDownClock reaches 0, `onComplete()` is invoked first, then `onSecond(0)` (and possibly `onMinute(0)`) in the same tick.
+That can happen when time elapses normally while running, or when `stop()` or `pause()` commits elapsed time and the
+clock is then in a completed state. `reset()` never fires `onComplete` as the clocks internal state is immediately reset
+before a tick can run to check for completion. In the tick where a CountDownClock reaches 0, `onComplete()` is invoked
+first, then `onSecond(0)` (and possibly `onMinute(0)`) in the same tick.
 
 ### Synchronous vs asynchronous callbacks
 
-Synchronous callbacks run inside the tick and **block** the clock logic: the next tick is only scheduled via `setTimeout` after `onComplete`, `onSecond`, and `onMinute` have been invoked. The time until the next whole-second boundary is computed at that moment (when `setTimeout` is called), so the delay is based on the current time after your callbacks return. As a result, short synchronous callbacks should not cause drift—as long as they are not long-running (i.e. no longer than a second in total per tick). Asynchronous callbacks are preferred when you need to do more work, but short synchronous callbacks (e.g. updating a simple UI or game value, or playing a voice over) are safe.
+Synchronous callbacks run inside the tick and **block** the clock logic: the next tick is only scheduled via
+`setTimeout` after `onComplete`, `onSecond`, and `onMinute` have been invoked. The time until the next whole-second
+boundary is computed at that moment (when `setTimeout` is called), so the delay is based on the current time after your
+callbacks return. As a result, short synchronous callbacks should not cause drift—as long as they are not long-running
+(i.e. no longer than a second in total per tick). Asynchronous callbacks are preferred when you need to do more work,
+but short synchronous callbacks (e.g. updating a simple UI or game value, or playing a voice over) are safe.
 
 ---
 
 ## Module: events
 
-This TypeScript `Events` namespace provides a centralized event subscription system for Battlefield Portal experience developers. In Battlefield Portal, each event handler function (like `OnPlayerDeployed`, `OngoingPlayer`, etc.) can only be implemented and exported once per entire project. This module implements all event handlers once, automatically hooking into every Battlefield Portal event, and exposes an API that allows you to subscribe to and unsubscribe from any event from multiple places in your codebase. This keeps your code clean, modular, and maintainable.
+This TypeScript `Events` namespace provides a centralized event subscription system for Battlefield Portal experience
+developers. In Battlefield Portal, each event handler function (like `OnPlayerDeployed`, `OngoingPlayer`, etc.) can only
+be implemented and exported once per entire project. This module implements all event handlers once, automatically
+hooking into every Battlefield Portal event, and exposes an API that allows you to subscribe to and unsubscribe from any
+event from multiple places in your codebase. This keeps your code clean, modular, and maintainable.
 
-> **Note** Do not implement or export any Battlefield Portal event handler functions in your codebase. This module handles all event hooking automatically and it owns all those hooks.
+> **Note** Do not implement or export any Battlefield Portal event handler functions in your codebase. This module
+> handles all event hooking automatically and it owns all those hooks.
 
 ### Example
 
@@ -192,7 +219,8 @@ Events.unsubscribe(Events.Type.OnPlayerDeployed, handler);
 
 #### Trigger
 
-Manually triggers an event with the given parameters. Primarily useful for debugging or testing. In normal operation, events are automatically triggered by the Battlefield Portal runtime when the corresponding game events occur.
+Manually triggers an event with the given parameters. Primarily useful for debugging or testing. In normal operation,
+events are automatically triggered by the Battlefield Portal runtime when the corresponding game events occur.
 
 **Channel style:**
 
@@ -202,7 +230,8 @@ Manually triggers an event with the given parameters. Primarily useful for debug
 **Enum style:**
 
 - **Signature:** `Events.trigger<T extends Type>(type: T, ...args: EventParameters<T>): void`
-- **Parameters:** `type` – The event type from `Events.Type` (trigger function for that event); `...args` – The parameters matching the event type's signature.
+- **Parameters:** `type` – The event type from `Events.Type` (trigger function for that event); `...args` – The
+  parameters matching the event type's signature.
 
 **Examples:**
 
@@ -228,7 +257,11 @@ Events.handlerCount(Events.Type.OnPlayerDeployed); // 2
 
 #### `Events.Type`
 
-An object mapping each event name to its trigger function (e.g. `Events.Type.OnPlayerDeployed`). Use these values with the object-style API: `Events.subscribe(type, handler)`, `Events.unsubscribe(type, handler)`, `Events.trigger(type, ...args)`, and `Events.handlerCount(type)`. You can also use it for typed references to event payloads (e.g. `Parameters<typeof Events.Type.OnPlayerDied>`) or to call a trigger by name (e.g. `Events.Type.OnPlayerDeployed(somePlayer)`).
+An object mapping each event name to its trigger function (e.g. `Events.Type.OnPlayerDeployed`). Use these values with
+the object-style API: `Events.subscribe(type, handler)`, `Events.unsubscribe(type, handler)`,
+`Events.trigger(type, ...args)`, and `Events.handlerCount(type)`. You can also use it for typed references to event
+payloads (e.g. `Parameters<typeof Events.Type.OnPlayerDied>`) or to call a trigger by name (e.g.
+`Events.Type.OnPlayerDeployed(somePlayer)`).
 
 **Example (typed payload / dynamic dispatch):**
 
@@ -245,13 +278,21 @@ Events.Type.OnPlayerDeployed(somePlayer);
 
 Available event types include:
 
-- `OngoingGlobal`, `OngoingAreaTrigger`, `OngoingCapturePoint`, `OngoingEmplacementSpawner`, `OngoingHQ`, `OngoingInteractPoint`, `OngoingLootSpawner`, `OngoingMCOM`, `OngoingPlayer`, `OngoingRingOfFire`, `OngoingSector`, `OngoingSpawner`, `OngoingSpawnPoint`, `OngoingTeam`, `OngoingVehicle`, `OngoingVehicleSpawner`, `OngoingWaypointPath`, `OngoingWorldIcon`
-- `OnAIMoveToFailed`, `OnAIMoveToRunning`, `OnAIMoveToSucceeded`, `OnAIParachuteRunning`, `OnAIParachuteSucceeded`, `OnAIWaypointIdleFailed`, `OnAIWaypointIdleRunning`, `OnAIWaypointIdleSucceeded`
+- `OngoingGlobal`, `OngoingAreaTrigger`, `OngoingCapturePoint`, `OngoingEmplacementSpawner`, `OngoingHQ`,
+  `OngoingInteractPoint`, `OngoingLootSpawner`, `OngoingMCOM`, `OngoingPlayer`, `OngoingRingOfFire`, `OngoingSector`,
+  `OngoingSpawner`, `OngoingSpawnPoint`, `OngoingTeam`, `OngoingVehicle`, `OngoingVehicleSpawner`,
+  `OngoingWaypointPath`, `OngoingWorldIcon`
+- `OnAIMoveToFailed`, `OnAIMoveToRunning`, `OnAIMoveToSucceeded`, `OnAIParachuteRunning`, `OnAIParachuteSucceeded`,
+  `OnAIWaypointIdleFailed`, `OnAIWaypointIdleRunning`, `OnAIWaypointIdleSucceeded`
 - `OnCapturePointCaptured`, `OnCapturePointCapturing`, `OnCapturePointLost`
 - `OnGameModeEnding`, `OnGameModeStarted`
 - `OnMandown`
 - `OnMCOMArmed`, `OnMCOMDefused`, `OnMCOMDestroyed`
-- `OnPlayerDamaged`, `OnPlayerDeployed`, `OnPlayerDied`, `OnPlayerEarnedKill`, `OnPlayerEarnedKillAssist`, `OnPlayerEnterAreaTrigger`, `OnPlayerEnterCapturePoint`, `OnPlayerEnterVehicle`, `OnPlayerEnterVehicleSeat`, `OnPlayerExitAreaTrigger`, `OnPlayerExitCapturePoint`, `OnPlayerExitVehicle`, `OnPlayerExitVehicleSeat`, `OnPlayerInteract`, `OnPlayerJoinGame`, `OnPlayerLeaveGame`, `OnPlayerSwitchTeam`, `OnPlayerUIButtonEvent`, `OnPlayerUndeploy`
+- `OnPlayerDamaged`, `OnPlayerDeployed`, `OnPlayerDied`, `OnPlayerEarnedKill`, `OnPlayerEarnedKillAssist`,
+  `OnPlayerEnterAreaTrigger`, `OnPlayerEnterCapturePoint`, `OnPlayerEnterVehicle`, `OnPlayerEnterVehicleSeat`,
+  `OnPlayerExitAreaTrigger`, `OnPlayerExitCapturePoint`, `OnPlayerExitVehicle`, `OnPlayerExitVehicleSeat`,
+  `OnPlayerInteract`, `OnPlayerJoinGame`, `OnPlayerLeaveGame`, `OnPlayerSwitchTeam`, `OnPlayerUIButtonEvent`,
+  `OnPlayerUndeploy`
 - `OnRayCastHit`, `OnRayCastMissed`
 - `OnRevived`
 - `OnRingOfFireZoneSizeChange`
@@ -278,19 +319,25 @@ Events.OnPlayerDeployed.subscribe((player: mod.Player) => {
 
 ## Usage Patterns
 
-- **Modular Event Handling** – Split your event handling logic across multiple files or modules. Each module can subscribe to the events it needs without conflicts.
+- **Modular Event Handling** – Split your event handling logic across multiple files or modules. Each module can
+  subscribe to the events it needs without conflicts.
 
-- **Conditional Subscriptions** – Subscribe and unsubscribe handlers dynamically based on game state. For example, only subscribe to vehicle events when vehicles are enabled.
+- **Conditional Subscriptions** – Subscribe and unsubscribe handlers dynamically based on game state. For example, only
+  subscribe to vehicle events when vehicles are enabled.
 
-- **Multiple Handlers per Event** – Subscribe multiple handlers to the same event to handle different concerns separately (e.g., one handler for logging, another for game logic, another for UI updates).
+- **Multiple Handlers per Event** – Subscribe multiple handlers to the same event to handle different concerns
+  separately (e.g., one handler for logging, another for game logic, another for UI updates).
 
-- **Async Operations** – Use async handlers for operations that require waiting, such as delayed actions or sequential operations.
+- **Async Operations** – Use async handlers for operations that require waiting, such as delayed actions or sequential
+  operations.
 
-- **Error Handling** – Since errors in handlers are isolated, you can add try-catch blocks within individual handlers for fine-grained error handling without affecting other subscriptions.
+- **Error Handling** – Since errors in handlers are isolated, you can add try-catch blocks within individual handlers
+  for fine-grained error handling without affecting other subscriptions.
 
 ### Advanced Example
 
-This example demonstrates how multiple modules across different files can subscribe to the same events independently, highlighting the key benefit of the Events system. Each module handles its own concerns without conflicts.
+This example demonstrates how multiple modules across different files can subscribe to the same events independently,
+highlighting the key benefit of the Events system. Each module handles its own concerns without conflicts.
 
 **File: `src/stats/player-stats.ts`**
 
@@ -445,35 +492,57 @@ Events.OnPlayerDeployed.subscribe((player: mod.Player) => {
 
 This example demonstrates:
 
-- **Multiple subscriptions to the same event** – `OnPlayerEarnedKill` is subscribed to by `PlayerStats` and `GameLogger`, and all handlers execute independently.
+- **Multiple subscriptions to the same event** – `OnPlayerEarnedKill` is subscribed to by `PlayerStats` and
+  `GameLogger`, and all handlers execute independently.
 
 - **Modular code organization** – Each module manages its own subscriptions without knowing about other modules.
 
 - **No conflicts** – All modules can subscribe to any event without interfering with each other.
 
-- **Clean separation of concerns** – Stats tracking, logging, and UI updates are handled in separate files but all respond to the same game events.
+- **Clean separation of concerns** – Stats tracking, logging, and UI updates are handled in separate files but all
+  respond to the same game events.
 
 ## Known Limitations & Caveats
 
-- **Single Event Hook Requirement** – You must not implement or export any Battlefield Portal event handler functions in your own code. If you do, they will conflict with this module's implementations and cause undefined behavior.
+- **Single Event Hook Requirement** – You must not implement or export any Battlefield Portal event handler functions in
+  your own code. If you do, they will conflict with this module's implementations and cause undefined behavior.
 
-- **Handler Reference Equality** – When unsubscribing, you must pass the exact same function reference that was used in `subscribe()`. Anonymous functions cannot be unsubscribed unless you store the reference. **Recommended:** Use the unsubscribe function returned by `subscribe()` instead of storing handler references.
+- **Handler Reference Equality** – When unsubscribing, you must pass the exact same function reference that was used in
+  `subscribe()`. Anonymous functions cannot be unsubscribed unless you store the reference. **Recommended:** Use the
+  unsubscribe function returned by `subscribe()` instead of storing handler references.
 
-- **Execution Order** – Handler execution order is not guaranteed. If you need handlers to execute in a specific order, chain them manually or use a single handler that calls other functions in order.
+- **Execution Order** – Handler execution order is not guaranteed. If you need handlers to execute in a specific order,
+  chain them manually or use a single handler that calls other functions in order.
 
-- **No Return Values** – Event handlers cannot return values to the caller. All handlers return `void` or `Promise<void>`. If you need to collect results, use shared state or callbacks.
+- **No Return Values** – Event handlers cannot return values to the caller. All handlers return `void` or
+  `Promise<void>`. If you need to collect results, use shared state or callbacks.
 
-- **Completion and Ordering** – Synchronous handlers complete before the trigger returns; asynchronous handlers are not awaited, so you cannot rely on async handlers finishing before other code runs. Long-running synchronous handlers block other handlers and the caller—prefer async handlers for non-trivial work. Use promises or callbacks if you need to wait for handler completion.
+- **Completion and Ordering** – Synchronous handlers complete before the trigger returns; asynchronous handlers are not
+  awaited, so you cannot rely on async handlers finishing before other code runs. Long-running synchronous handlers
+  block other handlers and the caller—prefer async handlers for non-trivial work. Use promises or callbacks if you need
+  to wait for handler completion.
 
 ---
 
 ## Module: ffa-drop-ins
 
-This TypeScript `FFADropIns` namespace enables Free For All (FFA) spawning for custom Battlefield Portal experiences by short-circuiting the normal deploy process in favor of a custom UI prompt with developer-curated drop-in spawn points. The system asks players if they would like to spawn now or be asked again after a delay, allowing players to adjust their loadout and settings at the deploy screen without being locked out.
+This TypeScript `FFADropIns` namespace enables Free For All (FFA) spawning for custom Battlefield Portal experiences by
+short-circuiting the normal deploy process in favor of a custom UI prompt with developer-curated drop-in spawn points.
+The system asks players if they would like to spawn now or be asked again after a delay, allowing players to adjust
+their loadout and settings at the deploy screen without being locked out.
 
-The spawning system accepts an arbitrary region of individual rectangles and an altitude. You call `FFADropIns.initialize()` to set up spawn points, `FFADropIns.enableSpawnQueueProcessing()` / `disableSpawnQueueProcessing()` to control queue processing, and create `FFADropIns.Soldier` instances per player.
+The spawning system accepts an arbitrary region of individual rectangles and an altitude. You call
+`FFADropIns.initialize()` to set up spawn points, `FFADropIns.enableSpawnQueueProcessing()` /
+`disableSpawnQueueProcessing()` to control queue processing, and create `FFADropIns.Soldier` instances per player.
 
-> **Note** The `FFADropIns` namespace depends on the `UI` and `Events` namespaces (both in this repository) and the `mod` namespace (available in the `bf6-portal-mod-types` package). Internally it uses `Timers`, `Clocks`, and `Vectors` from this repository. **You must use the `Events` module as your only mechanism to subscribe to game events**—do not implement or export any Battlefield Portal event handler functions in your own code. `FFADropIns` subscribes to `Events.OnPlayerLeaveGame` to clear per-player state and avoid resource leaks when a player leaves; the `UI` module uses `Events` to register the button handler. Because only one implementation of each Portal event can exist per project (the `Events` module owns those hooks), your mod must subscribe via `Events` only. See the [Events module — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
+> **Note** The `FFADropIns` namespace depends on the `UI` and `Events` namespaces (both in this repository) and the
+> `mod` namespace (available in the `bf6-portal-mod-types` package). Internally it uses `Timers`, `Clocks`, and
+> `Vectors` from this repository. **You must use the `Events` module as your only mechanism to subscribe to game
+> events**—do not implement or export any Battlefield Portal event handler functions in your own code. `FFADropIns`
+> subscribes to `Events.OnPlayerLeaveGame` to clear per-player state and avoid resource leaks when a player leaves; the
+> `UI` module uses `Events` to register the button handler. Because only one implementation of each Portal event can
+> exist per project (the `Events` module owns those hooks), your mod must subscribe via `Events` only. See the
+> [Events module — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
 
 ### Example
 
@@ -517,11 +586,15 @@ Events.OnPlayerUndeploy.subscribe((eventPlayer: mod.Player) => {
 
 ### Debug Position Display
 
-The `Soldier` constructor accepts an optional `showDebugPosition` parameter (default: `false`) that enables a real-time position display for developers. When enabled, the player's X, Y, and Z coordinates are displayed at the bottom center of the screen, updating every second.
+The `Soldier` constructor accepts an optional `showDebugPosition` parameter (default: `false`) that enables a real-time
+position display for developers. When enabled, the player's X, Y, and Z coordinates are displayed at the bottom center
+of the screen, updating every second.
 
-**Use Case**: Useful for finding and documenting drop-in regions and altitude (e.g. flying around to set rectangle bounds and `y`).
+**Use Case**: Useful for finding and documenting drop-in regions and altitude (e.g. flying around to set rectangle
+bounds and `y`).
 
-**Coordinate Format**: Coordinates are scaled by 100 and truncated (using integer truncation) to avoid Portal's decimal display issues. Divide the displayed value by 100 to get actual world coordinates.
+**Coordinate Format**: Coordinates are scaled by 100 and truncated (using integer truncation) to avoid Portal's decimal
+display issues. Divide the displayed value by 100 to get actual world coordinates.
 
 **Example Usage**:
 
@@ -534,31 +607,63 @@ Events.OnPlayerJoinGame.subscribe((eventPlayer: mod.Player) => {
 
 ### Required event subscription (via Events only)
 
-You must **not** implement or export any Battlefield Portal event handler functions. Subscribe to game events only through the `Events` module:
+You must **not** implement or export any Battlefield Portal event handler functions. Subscribe to game events only
+through the `Events` module:
 
-1. **`Events.OnGameModeStarted`** – In your subscriber, call `FFADropIns.initialize()` with your spawn data (rectangles + altitude) and `FFADropIns.enableSpawnQueueProcessing()` to start the system.
-2. **`Events.OnPlayerJoinGame`** – In your subscriber, create a new `FFADropIns.Soldier` instance for each player and call `soldier.startDelayForPrompt()` to begin the spawn flow.
-3. **`Events.OnPlayerUndeploy`** – In your subscriber, call `FFADropIns.Soldier.startDelayForPrompt(player)` to restart the spawn flow when players die or undeploy.
+1. **`Events.OnGameModeStarted`** – In your subscriber, call `FFADropIns.initialize()` with your spawn data
+   (rectangles + altitude) and `FFADropIns.enableSpawnQueueProcessing()` to start the system.
+2. **`Events.OnPlayerJoinGame`** – In your subscriber, create a new `FFADropIns.Soldier` instance for each player and
+   call `soldier.startDelayForPrompt()` to begin the spawn flow.
+3. **`Events.OnPlayerUndeploy`** – In your subscriber, call `FFADropIns.Soldier.startDelayForPrompt(player)` to restart
+   the spawn flow when players die or undeploy.
 
 ## Known Limitations & Caveats
 
-- **Events module required** – You **must** use the [Events module](../events/README.md) for all game event subscription and **must not** implement or export any Battlefield Portal event handler functions in your code. `FFADropIns` subscribes to `Events.OnPlayerLeaveGame` internally to clear per-player state and avoid resource leaks when a player leaves; the `UI` module also uses `Events` to register the button handler. Only one implementation of each Portal event can exist per project, and the Events module owns those hooks. If you export your own `OnPlayerJoinGame`, `OnGameModeStarted`, etc., they will conflict and cause undefined behavior. See [Events — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
-- **Random spawn selection** – When spawning from the queue, the system picks uniformly at random from the pre-created drop-in points. Two players can land at or near the same spot. There is no safe-distance or player-proximity logic (unlike `FFASpawnPoints`). For more spread, increase `dropInPoints` or use multiple rectangles with larger total area.
-- **UI Input Mode** – The system delegates automatic `mod.EnableUIInputMode()` management to the `UI` module. Be careful not to conflict with other UI systems that do not use the `UI` module that also control input mode.
-- **HQ Disabling** – The system automatically disables both team HQs during initialization. If you need team-based spawning elsewhere, you'll need to re-enable HQs manually (but you really should not be mixing this with other systems unless you know what you are doing).
-- **Spawn Point Cleanup** – Spawn points created during initialization are not automatically cleaned up. This is typically fine as they persist for the duration of the match.
-- **AI parachute behavior** – AI tend to open their parachutes very early and then fall slowly, making them easy targets for attackers and likely affecting game balance. Be aware of this when mixing human and AI players in drop-in modes.
-- **AI parachute timing and altitude** – No testing has been done to determine how much fall time (effective altitude) AI need to properly automatically open their parachutes. More work is needed to better control how and when AI open their chutes for balance and safety (e.g. minimum altitude, delay before open, or other tuning).
+- **Events module required** – You **must** use the [Events module](../events/README.md) for all game event subscription
+  and **must not** implement or export any Battlefield Portal event handler functions in your code. `FFADropIns`
+  subscribes to `Events.OnPlayerLeaveGame` internally to clear per-player state and avoid resource leaks when a player
+  leaves; the `UI` module also uses `Events` to register the button handler. Only one implementation of each Portal
+  event can exist per project, and the Events module owns those hooks. If you export your own `OnPlayerJoinGame`,
+  `OnGameModeStarted`, etc., they will conflict and cause undefined behavior. See
+  [Events — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
+- **Random spawn selection** – When spawning from the queue, the system picks uniformly at random from the pre-created
+  drop-in points. Two players can land at or near the same spot. There is no safe-distance or player-proximity logic
+  (unlike `FFASpawnPoints`). For more spread, increase `dropInPoints` or use multiple rectangles with larger total area.
+- **UI Input Mode** – The system delegates automatic `mod.EnableUIInputMode()` management to the `UI` module. Be careful
+  not to conflict with other UI systems that do not use the `UI` module that also control input mode.
+- **HQ Disabling** – The system automatically disables both team HQs during initialization. If you need team-based
+  spawning elsewhere, you'll need to re-enable HQs manually (but you really should not be mixing this with other systems
+  unless you know what you are doing).
+- **Spawn Point Cleanup** – Spawn points created during initialization are not automatically cleaned up. This is
+  typically fine as they persist for the duration of the match.
+- **AI parachute behavior** – AI tend to open their parachutes very early and then fall slowly, making them easy targets
+  for attackers and likely affecting game balance. Be aware of this when mixing human and AI players in drop-in modes.
+- **AI parachute timing and altitude** – No testing has been done to determine how much fall time (effective altitude)
+  AI need to properly automatically open their parachutes. More work is needed to better control how and when AI open
+  their chutes for balance and safety (e.g. minimum altitude, delay before open, or other tuning).
 
 ---
 
 ## Module: ffa-spawn-points
 
-This TypeScript `FFASpawnPoints` namespace enables Free For All (FFA) spawning for custom Battlefield Portal experiences by short-circuiting the normal deploy process in favor of a custom UI prompt with developer-curated fixed spawn points. The system asks players if they would like to spawn now or be asked again after a delay, allowing players to adjust their loadout and settings at the deploy screen without being locked out.
+This TypeScript `FFASpawnPoints` namespace enables Free For All (FFA) spawning for custom Battlefield Portal experiences
+by short-circuiting the normal deploy process in favor of a custom UI prompt with developer-curated fixed spawn points.
+The system asks players if they would like to spawn now or be asked again after a delay, allowing players to adjust
+their loadout and settings at the deploy screen without being locked out.
 
-The spawning system uses an intelligent algorithm to find safe spawn points that are appropriately distanced from other players, reducing the chance of spawning directly into combat while maintaining reasonable spawn times. You call `FFASpawnPoints.initialize()` to set up spawn points, `FFASpawnPoints.enableSpawnQueueProcessing()` / `disableSpawnQueueProcessing()` to control queue processing, and create `FFASpawnPoints.Soldier` instances per player.
+The spawning system uses an intelligent algorithm to find safe spawn points that are appropriately distanced from other
+players, reducing the chance of spawning directly into combat while maintaining reasonable spawn times. You call
+`FFASpawnPoints.initialize()` to set up spawn points, `FFASpawnPoints.enableSpawnQueueProcessing()` /
+`disableSpawnQueueProcessing()` to control queue processing, and create `FFASpawnPoints.Soldier` instances per player.
 
-> **Note** The `FFASpawnPoints` namespace depends on the `UI` and `Events` namespaces (both in this repository) and the `mod` namespace (available in the `bf6-portal-mod-types` package). Internally it uses `Timers`, `Clocks`, and `Vectors` from this repository. **You must use the `Events` module as your only mechanism to subscribe to game events**—do not implement or export any Battlefield Portal event handler functions in your own code. `FFASpawnPoints` subscribes to `Events.OnPlayerLeaveGame` to clear per-player state and avoid resource leaks when a player leaves; the `UI` module uses `Events` to register the button handler. Because only one implementation of each Portal event can exist per project (the `Events` module owns those hooks), your mod must subscribe via `Events` only. See the [Events module — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
+> **Note** The `FFASpawnPoints` namespace depends on the `UI` and `Events` namespaces (both in this repository) and the
+> `mod` namespace (available in the `bf6-portal-mod-types` package). Internally it uses `Timers`, `Clocks`, and
+> `Vectors` from this repository. **You must use the `Events` module as your only mechanism to subscribe to game
+> events**—do not implement or export any Battlefield Portal event handler functions in your own code. `FFASpawnPoints`
+> subscribes to `Events.OnPlayerLeaveGame` to clear per-player state and avoid resource leaks when a player leaves; the
+> `UI` module uses `Events` to register the button handler. Because only one implementation of each Portal event can
+> exist per project (the `Events` module owns those hooks), your mod must subscribe via `Events` only. See the
+> [Events module — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
 
 ### Example
 
@@ -613,11 +718,15 @@ Events.OnPlayerUndeploy.subscribe((eventPlayer: mod.Player) => {
 
 ### Debug Position Display
 
-The `Soldier` constructor accepts an optional `showDebugPosition` parameter (default: `false`) that enables a real-time position display for developers. When enabled, the player's X, Y, and Z coordinates are displayed at the bottom center of the screen, updating every second.
+The `Soldier` constructor accepts an optional `showDebugPosition` parameter (default: `false`) that enables a real-time
+position display for developers. When enabled, the player's X, Y, and Z coordinates are displayed at the bottom center
+of the screen, updating every second.
 
-**Use Case**: This feature is intended for developers who want to move around maps to find and document spawn positions, as Battlefield Portal does not provide a built-in way to display coordinates in-game.
+**Use Case**: This feature is intended for developers who want to move around maps to find and document spawn positions,
+as Battlefield Portal does not provide a built-in way to display coordinates in-game.
 
-**Coordinate Format**: Coordinates are scaled by 100 and truncated (using integer truncation) to avoid Portal's decimal display issues. For example:
+**Coordinate Format**: Coordinates are scaled by 100 and truncated (using integer truncation) to avoid Portal's decimal
+display issues. For example:
 
 - A position of `-100.24` will be displayed as `-10024`
 - A position of `50.67` will be displayed as `5067`
@@ -637,37 +746,66 @@ export async function OnPlayerJoinGame(eventPlayer: mod.Player): Promise<void> {
 
 ### Required event subscription (via Events only)
 
-You must **not** implement or export any Battlefield Portal event handler functions. Subscribe to game events only through the `Events` module:
+You must **not** implement or export any Battlefield Portal event handler functions. Subscribe to game events only
+through the `Events` module:
 
-1. **`Events.OnGameModeStarted`** – In your subscriber, call `FFASpawnPoints.initialize()` with your spawn points and `FFASpawnPoints.enableSpawnQueueProcessing()` to start the system.
-2. **`Events.OnPlayerJoinGame`** – In your subscriber, create a new `FFASpawnPoints.Soldier` instance for each player and call `soldier.startDelayForPrompt()` to begin the spawn flow.
-3. **`Events.OnPlayerUndeploy`** – In your subscriber, call `FFASpawnPoints.Soldier.startDelayForPrompt(player)` to restart the spawn flow when players die or undeploy.
+1. **`Events.OnGameModeStarted`** – In your subscriber, call `FFASpawnPoints.initialize()` with your spawn points and
+   `FFASpawnPoints.enableSpawnQueueProcessing()` to start the system.
+2. **`Events.OnPlayerJoinGame`** – In your subscriber, create a new `FFASpawnPoints.Soldier` instance for each player
+   and call `soldier.startDelayForPrompt()` to begin the spawn flow.
+3. **`Events.OnPlayerUndeploy`** – In your subscriber, call `FFASpawnPoints.Soldier.startDelayForPrompt(player)` to
+   restart the spawn flow when players die or undeploy.
 
 ## Known Limitations & Caveats
 
-- **Events module required** – Since `FFASpawnPoints` relies on `Events` and `UI`, you **must** use the [Events module](../events/README.md) for all game event subscription and **must not** implement or export any Battlefield Portal event handler functions in your code. If you export your own `OnPlayerJoinGame`, `OnGameModeStarted`, etc., they will conflict and cause undefined behavior. See [Events — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
-- **Rare Spawn Overlaps** – In rare cases, especially with many players and few spawn points, players may spawn on top of each other if no safe spawn point is found within `maxSpawnCandidates` iterations. Consider adjusting `maxSpawnCandidates` via the `FFASpawnPoints.initialize()` options or adding more spawn points to mitigate this.
-- **UI Input Mode** – The system delegates automatic `mod.EnableUIInputMode()` management to the `UI` module. Be careful not to conflict with other UI systems that do not use the `UI` module that also control input mode.
-- **HQ Disabling** – The system automatically disables both team HQs during initialization. If you need team-based spawning elsewhere, you'll need to re-enable HQs manually (but you really should not be mixing this with other systems unless you know what you are doing).
-- **Spawn Point Cleanup** – Spawn points created during initialization are not automatically cleaned up. This is typically fine as they persist for the duration of the match.
+- **Events module required** – Since `FFASpawnPoints` relies on `Events` and `UI`, you **must** use the
+  [Events module](../events/README.md) for all game event subscription and **must not** implement or export any
+  Battlefield Portal event handler functions in your code. If you export your own `OnPlayerJoinGame`,
+  `OnGameModeStarted`, etc., they will conflict and cause undefined behavior. See
+  [Events — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
+- **Rare Spawn Overlaps** – In rare cases, especially with many players and few spawn points, players may spawn on top
+  of each other if no safe spawn point is found within `maxSpawnCandidates` iterations. Consider adjusting
+  `maxSpawnCandidates` via the `FFASpawnPoints.initialize()` options or adding more spawn points to mitigate this.
+- **UI Input Mode** – The system delegates automatic `mod.EnableUIInputMode()` management to the `UI` module. Be careful
+  not to conflict with other UI systems that do not use the `UI` module that also control input mode.
+- **HQ Disabling** – The system automatically disables both team HQs during initialization. If you need team-based
+  spawning elsewhere, you'll need to re-enable HQs manually (but you really should not be mixing this with other systems
+  unless you know what you are doing).
+- **Spawn Point Cleanup** – Spawn points created during initialization are not automatically cleaned up. This is
+  typically fine as they persist for the duration of the match.
 
 ---
 
 ## Module: logger
 
-This TypeScript `Logger` class removes the biggest Battlefield Portal debugging pain point: until now you could only display strings that were pre-uploaded to the Experience website via a `strings.json` file, and displaying concatenated string with more than 3 parts was tricky, if not impossible. Further, `console.log` is only available for PC users, with a file written to their filesystem. By pairing a lightweight UI window with the `logger.strings.json` character map, this module lets you log any runtime text (errors, telemetry, formatted data, etc.) directly to the screen, even on console builds.
+This TypeScript `Logger` class removes the biggest Battlefield Portal debugging pain point: until now you could only
+display strings that were pre-uploaded to the Experience website via a `strings.json` file, and displaying concatenated
+string with more than 3 parts was tricky, if not impossible. Further, `console.log` is only available for PC users, with
+a file written to their filesystem. By pairing a lightweight UI window with the `logger.strings.json` character map,
+this module lets you log any runtime text (errors, telemetry, formatted data, etc.) directly to the screen, even on
+console builds.
 
 - **Dynamic mode** behaves like a scrolling console, always appending at the bottom and pushing older rows upward.
-- **Static mode** lets you target a specific row index (e.g., keep player position on row 10 while other diagnostics fill lines 0‑9).
+- **Static mode** lets you target a specific row index (e.g., keep player position on row 10 while other diagnostics
+  fill lines 0‑9).
 
-> **Note** Since the `Logger` namespace depends on the `UI` module, which depends on the `Events` module **you must use the `Events` module as your only mechanism to subscribe to game events**—do not implement or export any Battlefield Portal event handler functions in your own code. Because only one implementation of each Portal event can exist per project (the `Events` module owns those hooks), your mod must subscribe via `Events` only. See the [Events module — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
+> **Note** Since the `Logger` namespace depends on the `UI` module, which depends on the `Events` module **you must use
+> the `Events` module as your only mechanism to subscribe to game events**—do not implement or export any Battlefield
+> Portal event handler functions in your own code. Because only one implementation of each Portal event can exist per
+> project (the `Events` module owns those hooks), your mod must subscribe via `Events` only. See the
+> [Events module — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
 
 ## Usage Patterns
 
 - **Static dashboards** – Pin persistent diagnostics (positions, squad metadata, timers) to precise rows.
-- **Dynamic consoles** – Stream verbose traces (button clicks, state transitions, error stacks) without worrying about pre-provisioned strings.
-- **Multiple Instances** – Keep both modes active: e.g., static logger on the left for gauges, dynamic logger on the right for realtime traces.
-- **Performance considerations** – For long text messages or tall dynamic loggers, use `logAsync()` instead of `log()`. Long text can result in many 3-character Text UI Widgets, and in dynamic mode, moving all existing rows upward requires many UI operations. By using `logAsync()` without `await`, the logging operation becomes non-blocking by being sent to the microtask queue, preventing frame drops or execution delays.
+- **Dynamic consoles** – Stream verbose traces (button clicks, state transitions, error stacks) without worrying about
+  pre-provisioned strings.
+- **Multiple Instances** – Keep both modes active: e.g., static logger on the left for gauges, dynamic logger on the
+  right for realtime traces.
+- **Performance considerations** – For long text messages or tall dynamic loggers, use `logAsync()` instead of `log()`.
+  Long text can result in many 3-character Text UI Widgets, and in dynamic mode, moving all existing rows upward
+  requires many UI operations. By using `logAsync()` without `await`, the logging operation becomes non-blocking by
+  being sent to the microtask queue, preventing frame drops or execution delays.
 
 ### Example
 
@@ -717,9 +855,14 @@ export async function OnPlayerDeployed(eventPlayer: mod.Player): Promise<void> {
 
 ## Module: logging
 
-This TypeScript `Logging` class provides a fail-safe logging abstraction for Battlefield Portal experience developers. It abstracts away the logic to log text and errors to an arbitrary logging method in a fail-safe way, with configurable log level filtering. The class can be used directly within a BF6 Portal experience or can be used within other modules to provide consistent, safe logging functionality.
+This TypeScript `Logging` class provides a fail-safe logging abstraction for Battlefield Portal experience developers.
+It abstracts away the logic to log text and errors to an arbitrary logging method in a fail-safe way, with configurable
+log level filtering. The class can be used directly within a BF6 Portal experience or can be used within other modules
+to provide consistent, safe logging functionality.
 
-Key features include fail-safe error handling that prevents logging failures from crashing your mod, configurable log level filtering to control verbosity, optional error message inclusion, support for both synchronous and asynchronous logger functions, and automatic error-to-string conversion that safely handles any error type.
+Key features include fail-safe error handling that prevents logging failures from crashing your mod, configurable log
+level filtering to control verbosity, optional error message inclusion, support for both synchronous and asynchronous
+logger functions, and automatic error-to-string conversion that safely handles any error type.
 
 ### Example: Direct Usage in Portal Experience
 
@@ -896,15 +1039,22 @@ export async function OnGameModeStarted(): Promise<void> {
 
 ## Known Limitations & Caveats
 
-- **Error String Conversion Limitations** – While the class safely converts errors to strings, complex error objects may lose information in the conversion process. Only the error message (for `Error` instances) or the result of `String()` conversion is preserved. Also, while a logger like `console.log` can easily accept complex and log error objects or strings, other UI loggers (like the `Logger` module) may not, so consider `includeError = false` unless necessary.
+- **Error String Conversion Limitations** – While the class safely converts errors to strings, complex error objects may
+  lose information in the conversion process. Only the error message (for `Error` instances) or the result of `String()`
+  conversion is preserved. Also, while a logger like `console.log` can easily accept complex and log error objects or
+  strings, other UI loggers (like the `Logger` module) may not, so consider `includeError = false` unless necessary.
 
-- **Async Logger Timing** – If a logger function returns a `Promise`, the `log()` method does not await it. The promise is handled in a fire-and-forget manner to prevent blocking. This means you cannot rely on the log operation completing before your code continues.
+- **Async Logger Timing** – If a logger function returns a `Promise`, the `log()` method does not await it. The promise
+  is handled in a fire-and-forget manner to prevent blocking. This means you cannot rely on the log operation completing
+  before your code continues.
 
 ---
 
 ## Module: map-detector
 
-This TypeScript `MapDetector` class enables Battlefield Portal experience developers to detect the current map by analyzing the coordinates of Team 1's Headquarters (HQ). This utility is necessary because `mod.IsCurrentMap` from the official Battlefield Portal API is currently broken and unreliable.
+This TypeScript `MapDetector` class enables Battlefield Portal experience developers to detect the current map by
+analyzing the coordinates of Team 1's Headquarters (HQ). This utility is necessary because `mod.IsCurrentMap` from the
+official Battlefield Portal API is currently broken and unreliable.
 
 ### Example
 
@@ -966,7 +1116,13 @@ The `MapDetector` namespace supports detection of the following maps via the `Ma
 
 ## Custom map spatial layouts
 
-If your experience uses **custom spatial data** that moves Team 1's HQ from its default position on one or more maps, detection would otherwise fail. Call **`MapDetector.setCoordinates(map, coordinates)`** for **each map** where HQ1 has a non-default position. Do this **at the top of your file** (after imports), **not** inside an event handler—your code does not know the current map until the detector runs, so you must pre-configure every map whose layout you have changed. Pass the (x, y, z) position of HQ1 for that layout; only the **integer parts** of the coordinates are used when matching (decimal parts are ignored). That is sufficient because HQ positions differ widely between maps, so integer comparison is enough to distinguish them.
+If your experience uses **custom spatial data** that moves Team 1's HQ from its default position on one or more maps,
+detection would otherwise fail. Call **`MapDetector.setCoordinates(map, coordinates)`** for **each map** where HQ1 has a
+non-default position. Do this **at the top of your file** (after imports), **not** inside an event handler—your code
+does not know the current map until the detector runs, so you must pre-configure every map whose layout you have
+changed. Pass the (x, y, z) position of HQ1 for that layout; only the **integer parts** of the coordinates are used when
+matching (decimal parts are ignored). That is sufficient because HQ positions differ widely between maps, so integer
+comparison is enough to distinguish them.
 
 ---
 
@@ -974,31 +1130,54 @@ If your experience uses **custom spatial data** that moves Team 1's HQ from its 
 
 ### Missing Maps in Native Enum
 
-The map **"Contaminated"** is not available in the native `mod.Maps` enum (it is missing from the Battlefield Portal API). As a result:
+The map **"Contaminated"** is not available in the native `mod.Maps` enum (it is missing from the Battlefield Portal
+API). As a result:
 
 - `MapDetector.currentNativeMap()` will return `undefined` for Contaminated.
-- `MapDetector.isCurrentNativeMap()` will always return `false` for Contaminated when checking against any `mod.Maps` value.
+- `MapDetector.isCurrentNativeMap()` will always return `false` for Contaminated when checking against any `mod.Maps`
+  value.
 - `MapDetector.currentMap()` and `MapDetector.isCurrentMap()` **behave correctly for Contaminated**.
 
-Use `MapDetector.Map` enum values and `isCurrentMap()` when working with Contaminated (or for consistency, for all maps).
+Use `MapDetector.Map` enum values and `isCurrentMap()` when working with Contaminated (or for consistency, for all
+maps).
 
 ### Detection Method
 
-The detector identifies maps by comparing the **integer parts** of Team 1's HQ position (x, y, z) to the known coordinates for each map; decimal parts are ignored. If custom spatial data has moved HQ1 on certain maps, call `setCoordinates()` at the top of your file for each affected map with the new HQ1 position so detection continues to work.
+The detector identifies maps by comparing the **integer parts** of Team 1's HQ position (x, y, z) to the known
+coordinates for each map; decimal parts are ignored. If custom spatial data has moved HQ1 on certain maps, call
+`setCoordinates()` at the top of your file for each affected map with the new HQ1 position so detection continues to
+work.
 
 ---
 
 ## Module: multi-click-detector
 
-This TypeScript `MultiClickDetector` class enables Battlefield Portal experience developers to detect when a player has rapidly triggered a soldier state multiple times in quick succession. The detector can monitor any soldier state boolean from `mod.SoldierStateBool`, allowing you to detect multi-click sequences for various player actions.
+This TypeScript `MultiClickDetector` class enables Battlefield Portal experience developers to detect when a player has
+rapidly triggered a soldier state multiple times in quick succession. The detector can monitor any soldier state boolean
+from `mod.SoldierStateBool`, allowing you to detect multi-click sequences for various player actions.
 
-The detector tracks soldier state transitions for each player independently, counting rapid state changes within a configurable time window to determine when a multi-click sequence has been completed. Each detector instance is configured with runtime options (including which soldier state to monitor) and a callback that is triggered when a multi-click sequence is detected.
+The detector tracks soldier state transitions for each player independently, counting rapid state changes within a
+configurable time window to determine when a multi-click sequence has been completed. Each detector instance is
+configured with runtime options (including which soldier state to monitor) and a callback that is triggered when a
+multi-click sequence is detected.
 
-By default, the detector monitors `mod.SoldierStateBool.IsInteracting`, which is the most user-friendly option because the interact state goes `true` for 1 tick even when there is no object that can be interacted with nearby. This makes it ideal for detecting multi-click sequences without requiring physical interaction points, and is useful because there is no keybind Portal experience developers can hook into to open up a custom UI.
+By default, the detector monitors `mod.SoldierStateBool.IsInteracting`, which is the most user-friendly option because
+the interact state goes `true` for 1 tick even when there is no object that can be interacted with nearby. This makes it
+ideal for detecting multi-click sequences without requiring physical interaction points, and is useful because there is
+no keybind Portal experience developers can hook into to open up a custom UI.
 
-Key features include instance-based construction with per-instance configuration, **automatic event wiring** via the `Events` module (the detector subscribes to `OngoingPlayer`, `OnPlayerDeployed`, `OnPlayerUndeploy`, and `OnPlayerLeaveGame` internally), and configurable logging. Soldier state is only read when the player is deployed, so the admin error log is not flooded. Each detector can be enabled or disabled independently. Callbacks can be sync or async; **asynchronous callbacks are preferred** because synchronous callbacks block the entire `OngoingPlayer` event stack. Keep sync callbacks short if you use them.
+Key features include instance-based construction with per-instance configuration, **automatic event wiring** via the
+`Events` module (the detector subscribes to `OngoingPlayer`, `OnPlayerDeployed`, `OnPlayerUndeploy`, and
+`OnPlayerLeaveGame` internally), and configurable logging. Soldier state is only read when the player is deployed, so
+the admin error log is not flooded. Each detector can be enabled or disabled independently. Callbacks can be sync or
+async; **asynchronous callbacks are preferred** because synchronous callbacks block the entire `OngoingPlayer` event
+stack. Keep sync callbacks short if you use them.
 
-> **Note** You **must** use the `Events` module as your only mechanism to subscribe to game events. Do not implement or export any Battlefield Portal event handler functions (`OngoingPlayer`, `OnPlayerDeployed`, `OnPlayerDied`, etc.) in your code. The `Events` module subscribes to those events internally and only one implementation of each can exist per project, so it owns those hooks. See the [Events module — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
+> **Note** You **must** use the `Events` module as your only mechanism to subscribe to game events. Do not implement or
+> export any Battlefield Portal event handler functions (`OngoingPlayer`, `OnPlayerDeployed`, `OnPlayerDied`, etc.) in
+> your code. The `Events` module subscribes to those events internally and only one implementation of each can exist per
+> project, so it owns those hooks. See the
+> [Events module — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
 
 ### Example
 
@@ -1032,19 +1211,29 @@ Events.OnPlayerJoinGame.subscribe((player: mod.Player) => {
 
 ### Event subscription (Events module only)
 
-You must **not** implement or export any Battlefield Portal event handler functions. The detector subscribes internally to `Events.OngoingPlayer`, `Events.OnPlayerDeployed`, `Events.OnPlayerUndeploy`, and `Events.OnPlayerLeaveGame`. Use the Events module for your own logic (e.g. `Events.OnPlayerJoinGame.subscribe(...)` to create detectors). There are no required event handlers for you to wire—event handling is automatic.
+You must **not** implement or export any Battlefield Portal event handler functions. The detector subscribes internally
+to `Events.OngoingPlayer`, `Events.OnPlayerDeployed`, `Events.OnPlayerUndeploy`, and `Events.OnPlayerLeaveGame`. Use the
+Events module for your own logic (e.g. `Events.OnPlayerJoinGame.subscribe(...)` to create detectors). There are no
+required event handlers for you to wire—event handling is automatic.
 
 ### Lifecycle Flow
 
 1. Import `MultiClickDetector` and `Events`; subscribe to game events only via `Events`.
 2. Optionally configure logging with `MultiClickDetector.setLogging()` (recommended during development).
-3. Create detector instances for players in your event subscribers (e.g. `Events.OnPlayerJoinGame.subscribe((player) => { new MultiClickDetector(player, callback, options); })`). No need to call `handleOngoingPlayer` or `pruneInvalidPlayers`—the detector subscribes to the required events internally.
+3. Create detector instances for players in your event subscribers (e.g.
+   `Events.OnPlayerJoinGame.subscribe((player) => { new MultiClickDetector(player, callback, options); })`). No need to
+   call `handleOngoingPlayer` or `pruneInvalidPlayers`—the detector subscribes to the required events internally.
 4. The module automatically:
-    - Gates detector logic by deployment: soldier state is only read when the player is deployed (`OnPlayerDeployed` sets a player-level flag; `OnPlayerUndeploy` clears it). Each detector's own `enable()`/`disable()` state is **not** overwritten by deploy or undeploy.
+    - Gates detector logic by deployment: soldier state is only read when the player is deployed (`OnPlayerDeployed`
+      sets a player-level flag; `OnPlayerUndeploy` clears it). Each detector's own `enable()`/`disable()` state is
+      **not** overwritten by deploy or undeploy.
     - Tracks soldier state transitions via `OngoingPlayer` (only for deployed players)
     - Removes all detectors for that player when they leave (`OnPlayerLeaveGame`)
-    - For each enabled detector (when the player is deployed), counts state changes within the time window, resets sequences that exceed it, and invokes the callback (via `CallbackHandler`) when the required number of state changes is detected
-5. You may call call `detector.destroy()` when you no longer need a specific detector; otherwise cleanup is automatic on player leave.
+    - For each enabled detector (when the player is deployed), counts state changes within the time window, resets
+      sequences that exceed it, and invokes the callback (via `CallbackHandler`) when the required number of state
+      changes is detected
+5. You may call call `detector.destroy()` when you no longer need a specific detector; otherwise cleanup is automatic on
+   player leave.
 
 ### Example: Multiple Detectors per Player
 
@@ -1083,46 +1272,71 @@ Events.OnPlayerDeployed.subscribe((player: mod.Player) => {
 
 ## Choosing a Soldier State
 
-The detector can monitor any soldier state boolean from `mod.SoldierStateBool`, but not all states are equally suitable for multi-click detection. This section explains which states work best and why.
+The detector can monitor any soldier state boolean from `mod.SoldierStateBool`, but not all states are equally suitable
+for multi-click detection. This section explains which states work best and why.
 
 ### Recommended: `IsInteracting` (Default)
 
 **Why it's the best choice:**
 
-- **No visual side effects** – When a player rapidly presses the interact key, the interact state goes `true` for 1 ticks even when there is no object or interaction points that can be interacted with nearby. This means players can perform multi-click sequences without any visual feedback or character movement, making it feel like a hidden input method.
-- **No gameplay impact** – Unlike other states, rapid interact presses don't cause the player's character to perform any actions that could interfere with gameplay.
+- **No visual side effects** – When a player rapidly presses the interact key, the interact state goes `true` for 1
+  ticks even when there is no object or interaction points that can be interacted with nearby. This means players can
+  perform multi-click sequences without any visual feedback or character movement, making it feel like a hidden input
+  method.
+- **No gameplay impact** – Unlike other states, rapid interact presses don't cause the player's character to perform any
+  actions that could interfere with gameplay.
 - **Caveat** - Players must have their `Interact` keybind set to `Tap`, not `Hold`.
 
-**Use case:** Opening custom menus, triggering special abilities, or any action where you want a hidden input method that doesn't affect the player's character visually or mechanically.
+**Use case:** Opening custom menus, triggering special abilities, or any action where you want a hidden input method
+that doesn't affect the player's character visually or mechanically.
 
 ### Secondary Options: `IsCrouching` and `IsSprinting`
 
 **Why they work but have drawbacks:**
 
-- **Rapid toggling is possible** – Both `IsCrouching` and `IsSprinting` can be rapidly toggled by players, making them technically viable for multi-click detection.
-- **Visual jittering** – Rapidly toggling these states causes the player's character to visually jitter as it tries to crouch/stand or sprint/walk in quick succession. This can be distracting and may interfere with gameplay.
-- **Gameplay impact** – The character actually performs these actions, which may not be desirable if you're just trying to detect input for a UI or special ability.
-- **Benefit** - Unlike requiring players to ensure their `Interact` keybind set to `Tap`, it is more likely players can already quickly toggle `Sprint` or `Crouch` with their existing keybind settings.
+- **Rapid toggling is possible** – Both `IsCrouching` and `IsSprinting` can be rapidly toggled by players, making them
+  technically viable for multi-click detection.
+- **Visual jittering** – Rapidly toggling these states causes the player's character to visually jitter as it tries to
+  crouch/stand or sprint/walk in quick succession. This can be distracting and may interfere with gameplay.
+- **Gameplay impact** – The character actually performs these actions, which may not be desirable if you're just trying
+  to detect input for a UI or special ability.
+- **Benefit** - Unlike requiring players to ensure their `Interact` keybind set to `Tap`, it is more likely players can
+  already quickly toggle `Sprint` or `Crouch` with their existing keybind settings.
 
-**Use case:** Consider these if you need more than one multi-click detection (and you've already used the `IsInteracting` state), or if you are comfortable forcing players to physically jitter a bit, but not have to change their `Interact` keybind set to `Tap`.
+**Use case:** Consider these if you need more than one multi-click detection (and you've already used the
+`IsInteracting` state), or if you are comfortable forcing players to physically jitter a bit, but not have to change
+their `Interact` keybind set to `Tap`.
 
-- **Memory** – Detectors for a player are removed automatically when the player leaves. Hold a detector reference only if you need to call `enable()`, `disable()`, or `destroy()` yourself; otherwise you can create detectors without storing the return value.
+- **Memory** – Detectors for a player are removed automatically when the player leaves. Hold a detector reference only
+  if you need to call `enable()`, `disable()`, or `destroy()` yourself; otherwise you can create detectors without
+  storing the return value.
 
 ---
 
 ## Module: performance-stats
 
-It is not recommended to use this module in its current state as it lacks core functionality to return meaningful metrics.
+It is not recommended to use this module in its current state as it lacks core functionality to return meaningful
+metrics.
 
 ---
 
 ## Module: player-undeploy-fixer
 
-The `PlayerUndeployFixer` namespace is a small helper that automatically subscribes to `OnPlayerDied`, `OnPlayerUndeploy`, and `OnPlayerLeaveGame` via the `Events` module. It tracks whether a player who died has properly undeployed within a fixed time window (currently 30 seconds). If not—e.g. the player is stuck in a "limbo" state where the engine did not fire `OnPlayerUndeploy`—the fixer manually triggers `Events.OnPlayerUndeploy.trigger(player)` so that any code subscribed to `OnPlayerUndeploy` runs correctly. This fix is mainly useful in handling static AI bots that do not properly undeploy when they die, which, when left unchecked, results in a slowly growing population of stuck AI that never redeploy.
+The `PlayerUndeployFixer` namespace is a small helper that automatically subscribes to `OnPlayerDied`,
+`OnPlayerUndeploy`, and `OnPlayerLeaveGame` via the `Events` module. It tracks whether a player who died has properly
+undeployed within a fixed time window (currently 30 seconds). If not—e.g. the player is stuck in a "limbo" state where
+the engine did not fire `OnPlayerUndeploy`—the fixer manually triggers `Events.OnPlayerUndeploy.trigger(player)` so that
+any code subscribed to `OnPlayerUndeploy` runs correctly. This fix is mainly useful in handling static AI bots that do
+not properly undeploy when they die, which, when left unchecked, results in a slowly growing population of stuck AI that
+never redeploy.
 
 No setup is required beyond importing the module; subscribing and triggering are handled internally.
 
-> **Note** You **must** use the `Events` module as your only mechanism to subscribe to game events. Do not implement or export any Battlefield Portal event handler functions (`OnPlayerDied`, `OnPlayerUndeploy`, `OnPlayerDeployed`, etc.) in your code. The `Events` module owns those hooks and this module relies on it; only one implementation of each event handler can exist per project. See the [Events module — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
+> **Note** You **must** use the `Events` module as your only mechanism to subscribe to game events. Do not implement or
+> export any Battlefield Portal event handler functions (`OnPlayerDied`, `OnPlayerUndeploy`, `OnPlayerDeployed`, etc.)
+> in your code. The `Events` module owns those hooks and this module relies on it; only one implementation of each event
+> handler can exist per project. See the
+> [Events module — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
 
 ### Example
 
@@ -1135,19 +1349,37 @@ PlayerUndeployFixer.setLogging((text) => console.log(text), PlayerUndeployFixer.
 
 ## Known Limitations & Caveats
 
-- **Events module required** – Since this module uses the `Events` module, you **must** use the [Events module](../events/README.md) for all game event subscription and **must not** implement or export any Battlefield Portal event handler functions. See [Events — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
-- **Fixed delay** – The time window before forcing an undeploy is currently a fixed 30 seconds and is not configurable via the public API.
-- **Trigger semantics** – When the fixer calls `Events.OnPlayerUndeploy.trigger(player)`, all subscribers to `OnPlayerUndeploy` are invoked. Ensure your subscriber can safely run when the player is in the "stuck" state (e.g. not assuming the player is on the deploy screen in the usual way).
+- **Events module required** – Since this module uses the `Events` module, you **must** use the
+  [Events module](../events/README.md) for all game event subscription and **must not** implement or export any
+  Battlefield Portal event handler functions. See
+  [Events — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
+- **Fixed delay** – The time window before forcing an undeploy is currently a fixed 30 seconds and is not configurable
+  via the public API.
+- **Trigger semantics** – When the fixer calls `Events.OnPlayerUndeploy.trigger(player)`, all subscribers to
+  `OnPlayerUndeploy` are invoked. Ensure your subscriber can safely run when the player is in the "stuck" state (e.g.
+  not assuming the player is on the deploy screen in the usual way).
 
 ---
 
 ## Module: raycast
 
-This TypeScript `Raycast` namespace abstracts the raycasting functionality of BF6 Portal and handles attributing raycast hits and misses to the correct raycasts created, since the native functionality does not do this. It subscribes to `OnRayCastHit` and `OnRayCastMissed` via the `Events` module at load time, so hit and miss events are routed automatically—no manual event wiring is required. You pass hit and miss callbacks when calling `Raycast.cast()`, which keeps code readable and modular.
+This TypeScript `Raycast` namespace abstracts the raycasting functionality of BF6 Portal and handles attributing raycast
+hits and misses to the correct raycasts created, since the native functionality does not do this. It subscribes to
+`OnRayCastHit` and `OnRayCastMissed` via the `Events` module at load time, so hit and miss events are routed
+automatically—no manual event wiring is required. You pass hit and miss callbacks when calling `Raycast.cast()`, which
+keeps code readable and modular.
 
-The namespace tracks active rays per player, uses geometric distance calculations to match hit points to ray segments, and automatically handles cleanup of expired rays and player states. A time-to-live (TTL) system ensures that old rays don't accumulate in memory, and a sophisticated pending misses resolution system correctly attributes misses to rays when the native API provides ambiguous information. The module uses the `Logging` module for internal logging, allowing you to monitor callback errors and debug raycast behavior.
+The namespace tracks active rays per player, uses geometric distance calculations to match hit points to ray segments,
+and automatically handles cleanup of expired rays and player states. A time-to-live (TTL) system ensures that old rays
+don't accumulate in memory, and a sophisticated pending misses resolution system correctly attributes misses to rays
+when the native API provides ambiguous information. The module uses the `Logging` module for internal logging, allowing
+you to monitor callback errors and debug raycast behavior.
 
-> **Note** Since this module uses the `Events` module for `OnRayCastHit` and `OnRayCastMissed`, you **must** use the `Events` module as your only mechanism to subscribe to game events. Do not implement or export any Battlefield Portal event handler functions (`OnRayCastHit`, `OnRayCastMissed`, `OnPlayerDeployed`, etc.) in your code. The `Events` module owns those hooks and this module relies on it; only one implementation of each event handler can exist per project. See the [Events module — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
+> **Note** Since this module uses the `Events` module for `OnRayCastHit` and `OnRayCastMissed`, you **must** use the
+> `Events` module as your only mechanism to subscribe to game events. Do not implement or export any Battlefield Portal
+> event handler functions (`OnRayCastHit`, `OnRayCastMissed`, `OnPlayerDeployed`, etc.) in your code. The `Events`
+> module owns those hooks and this module relies on it; only one implementation of each event handler can exist per
+> project. See the [Events module — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
 
 ### Example
 
@@ -1206,7 +1438,8 @@ Events.OnPlayerDeployed.subscribe((eventPlayer: mod.Player) => {
 
 ### Example: Line of Sight Check
 
-Note: This example is not technically a sufficient LOS check implementation as it does not correctly use the player's eye position, nor does it take into account if the target is without a cone of view of the player's eye direction.
+Note: This example is not technically a sufficient LOS check implementation as it does not correctly use the player's
+eye position, nor does it take into account if the target is without a cone of view of the player's eye direction.
 
 ```ts
 import { Raycast } from 'bf6-portal-utils/raycast';
@@ -1241,29 +1474,55 @@ function checkLineOfSight(player: mod.Player, target: mod.Player): Promise<boole
 
 ## Known Limitations & Caveats
 
-- **Events module required** – You **must** use the [Events module](../events/README.md) for all game event subscription and **must not** implement or export any Battlefield Portal event handler functions. This module subscribes to `OnRayCastHit` and `OnRayCastMissed` via Events. See [Events — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
+- **Events module required** – You **must** use the [Events module](../events/README.md) for all game event subscription
+  and **must not** implement or export any Battlefield Portal event handler functions. This module subscribes to
+  `OnRayCastHit` and `OnRayCastMissed` via Events. See
+  [Events — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
 
-- **Multiple Simultaneous Rays** – The module can handle multiple rays from the same player, but if many rays are cast in quick succession, the geometric attribution algorithm may become less efficient. In practice, this is rarely an issue since the linear scan is very fast for small ray counts.
+- **Multiple Simultaneous Rays** – The module can handle multiple rays from the same player, but if many rays are cast
+  in quick succession, the geometric attribution algorithm may become less efficient. In practice, this is rarely an
+  issue since the linear scan is very fast for small ray counts.
 
-- **Miss Attribution Ambiguity** – The native API doesn't distinguish which specific ray missed, so the module uses a counting heuristic. In rare cases with many simultaneous rays, misses may be attributed slightly later than ideal, but they will always be correctly resolved.
+- **Miss Attribution Ambiguity** – The native API doesn't distinguish which specific ray missed, so the module uses a
+  counting heuristic. In rare cases with many simultaneous rays, misses may be attributed slightly later than ideal, but
+  they will always be correctly resolved.
 
-- **TTL Precision** – Expired rays trigger their miss callbacks after the TTL expires, not at the exact expiration time. The actual cleanup happens during pruning operations (every 5 seconds) or lazy pruning (before adding new rays).
+- **TTL Precision** – Expired rays trigger their miss callbacks after the TTL expires, not at the exact expiration time.
+  The actual cleanup happens during pruning operations (every 5 seconds) or lazy pruning (before adding new rays).
 
-- **Callback Errors** – Callback errors (both synchronous and asynchronous) are automatically caught and logged (if logging is configured via `Raycast.setLogging()`) to prevent one failing callback from breaking the entire raycast system. Errors are logged at the `Error` log level. If you need additional error handling, implement it inside your callbacks.
+- **Callback Errors** – Callback errors (both synchronous and asynchronous) are automatically caught and logged (if
+  logging is configured via `Raycast.setLogging()`) to prevent one failing callback from breaking the entire raycast
+  system. Errors are logged at the `Error` log level. If you need additional error handling, implement it inside your
+  callbacks.
 
-- **Player State Cleanup** – While automatic pruning runs every 5 seconds, you may call `Raycast.pruneAllStates()` from a handler subscribed to `Events.OnPlayerLeaveGame` to immediately clean up state when players leave.
+- **Player State Cleanup** – While automatic pruning runs every 5 seconds, you may call `Raycast.pruneAllStates()` from
+  a handler subscribed to `Events.OnPlayerLeaveGame` to immediately clean up state when players leave.
 
-- **Distance Epsilon** – The hit attribution uses a 0.5m (`_DISTANCE_EPSILON`) sanity cap for distance comparisons. The algorithm finds the best-fitting ray (lowest error) among all candidates, and only considers rays where the error is within this tolerance. This acts as a sanity check to prevent misattribution rather than a strict matching threshold.
+- **Distance Epsilon** – The hit attribution uses a 0.5m (`_DISTANCE_EPSILON`) sanity cap for distance comparisons. The
+  algorithm finds the best-fitting ray (lowest error) among all candidates, and only considers rays where the error is
+  within this tolerance. This acts as a sanity check to prevent misattribution rather than a strict matching threshold.
 
 ---
 
 ## Module: scavenger-drop
 
-This TypeScript `ScavengerDrop` class provides functionality for Battlefield Portal experiences to detect when a player scavenges a dead player's kit bag. In Battlefield 6, when a player dies, they drop a bag containing their kit that despawns after approximately 37 seconds. Players can pick up weapons from these bags, but the default behavior does not replenish the scavenging player's ammo. This module allows you to perform custom actions (such as resupplying ammo, displaying messages, or any other logic) when the first player gets within 2 meters of a dead player's body.
+This TypeScript `ScavengerDrop` class provides functionality for Battlefield Portal experiences to detect when a player
+scavenges a dead player's kit bag. In Battlefield 6, when a player dies, they drop a bag containing their kit that
+despawns after approximately 37 seconds. Players can pick up weapons from these bags, but the default behavior does not
+replenish the scavenging player's ammo. This module allows you to perform custom actions (such as resupplying ammo,
+displaying messages, or any other logic) when the first player gets within 2 meters of a dead player's body.
 
-**Why use ScavengerDrop?** The `ScavengerDrop` module offers significant advantages: automatic detection of players scavenging dead bodies, performance-optimized checking that scales frequency based on proximity, support for custom callbacks to handle scavenging events, and automatic cleanup when drops expire or are scavenged. Ideal for ammo resupply systems, custom loot mechanics, achievement tracking, or any scenario where you need to detect and respond to players picking up dropped kits.
+**Why use ScavengerDrop?** The `ScavengerDrop` module offers significant advantages: automatic detection of players
+scavenging dead bodies, performance-optimized checking that scales frequency based on proximity, support for custom
+callbacks to handle scavenging events, and automatic cleanup when drops expire or are scavenged. Ideal for ammo resupply
+systems, custom loot mechanics, achievement tracking, or any scenario where you need to detect and respond to players
+picking up dropped kits.
 
-Key features include adaptive check frequency that increases as players get closer to drops (reducing overhead when drops are far away), automatic expiration after the configured duration (defaulting to 37 seconds to match the game's bag despawn time), graceful error handling that prevents callback failures from crashing your mod, and configurable logging for debugging scavenger drop behavior. The module uses the `Timers` module for interval management and the `Logging` module for internal logging.
+Key features include adaptive check frequency that increases as players get closer to drops (reducing overhead when
+drops are far away), automatic expiration after the configured duration (defaulting to 37 seconds to match the game's
+bag despawn time), graceful error handling that prevents callback failures from crashing your mod, and configurable
+logging for debugging scavenger drop behavior. The module uses the `Timers` module for interval management and the
+`Logging` module for internal logging.
 
 ### Example
 
@@ -1298,12 +1557,14 @@ export function OnPlayerDied(
 ## Usage Patterns
 
 - **Basic ammo resupply** – Use `mod.Resupply()` in the callback to give players full ammo when they scavenge a kit.
-- **Custom ammo management** – Use `mod.SetInventoryAmmo()` and `mod.SetInventoryMagazineAmmo()` for fine-grained ammo control.
+- **Custom ammo management** – Use `mod.SetInventoryAmmo()` and `mod.SetInventoryMagazineAmmo()` for fine-grained ammo
+  control.
 - **Player notifications** – Use `mod.DisplayHighlightedWorldLogMessage()` to inform players when they scavenge a kit.
 - **Kill Confirmed** – Spawn an item on the dead body and give points to the player or team that confirms the kill.
 - **Achievement tracking** – Track scavenging events for statistics or achievements.
 - **Custom loot systems** – Implement custom loot mechanics beyond the default kit bag behavior.
-- **Drop cleanup** – Use `stop()` to manually cancel drops when needed (e.g., if a player respawns before the drop expires).
+- **Drop cleanup** – Use `stop()` to manually cancel drops when needed (e.g., if a player respawns before the drop
+  expires).
 
 ### Example: Custom Duration and Check Interval and Async Callback Handling
 
@@ -1338,32 +1599,51 @@ export function OnPlayerDied(
 
 ## Known Limitations & Caveats
 
-- **Position Capture** – The drop captures the position of the dead player's body at creation time. If the body moves (e.g., due to physics or explosions), the drop will continue checking the original position. Always create the drop immediately in `OnPlayerDied` to ensure the position is accurate.
+- **Position Capture** – The drop captures the position of the dead player's body at creation time. If the body moves
+  (e.g., due to physics or explosions), the drop will continue checking the original position. Always create the drop
+  immediately in `OnPlayerDied` to ensure the position is accurate.
 
-- **Single Trigger** – Each drop triggers its callback only once—when the first player gets within 2 meters. If multiple players are close when the check occurs, only the closest player triggers the callback. If you need to handle multiple scavengers, create multiple drops or implement custom logic in your callback.
+- **Single Trigger** – Each drop triggers its callback only once—when the first player gets within 2 meters. If multiple
+  players are close when the check occurs, only the closest player triggers the callback. If you need to handle multiple
+  scavengers, create multiple drops or implement custom logic in your callback.
 
-- **Distance Precision** – The 2-meter threshold is fixed and cannot be configured. The threshold matches typical interaction ranges in Battlefield Portal that feel reasonable and ergonomic.
+- **Distance Precision** – The 2-meter threshold is fixed and cannot be configured. The threshold matches typical
+  interaction ranges in Battlefield Portal that feel reasonable and ergonomic.
 
-- **Check Interval Precision** – The actual check frequency adapts based on player proximity, but the base `checkInterval` determines the minimum time between checks. Timer precision depends on `mod.Wait()`'s precision (used by the `Timers` module), which may vary slightly based on game performance and frame timing.
+- **Check Interval Precision** – The actual check frequency adapts based on player proximity, but the base
+  `checkInterval` determines the minimum time between checks. Timer precision depends on `mod.Wait()`'s precision (used
+  by the `Timers` module), which may vary slightly based on game performance and frame timing.
 
-- **Performance Considerations** – While the adaptive check frequency reduces overhead, creating many drops simultaneously (e.g., during intense combat with many deaths) will still create multiple interval timers. The module is optimized for typical gameplay scenarios, but extreme cases with hundreds of concurrent drops may impact performance.
+- **Performance Considerations** – While the adaptive check frequency reduces overhead, creating many drops
+  simultaneously (e.g., during intense combat with many deaths) will still create multiple interval timers. The module
+  is optimized for typical gameplay scenarios, but extreme cases with hundreds of concurrent drops may impact
+  performance.
 
-- **Async Callbacks** – Callbacks can be synchronous or asynchronous (returning `void` or `Promise<void>`). Async callbacks are not awaited by the drop, meaning:
+- **Async Callbacks** – Callbacks can be synchronous or asynchronous (returning `void` or `Promise<void>`). Async
+  callbacks are not awaited by the drop, meaning:
     - The drop doesn't wait for async operations to complete before cleaning up
     - Errors or rejections from async callbacks are automatically caught and logged (if logging is configured)
     - If you need to await async operations, handle that inside your callback
 
-- **Concurrent Drops** – Multiple drops can exist simultaneously and operate independently. Each drop maintains its own timers and state. There is no built-in limit on the number of concurrent drops.
+- **Concurrent Drops** – Multiple drops can exist simultaneously and operate independently. Each drop maintains its own
+  timers and state. There is no built-in limit on the number of concurrent drops.
 
 ---
 
 ## Module: solid-ui
 
-This TypeScript `SolidUI` namespace provides a reactive UI framework for Battlefield Portal, inspired by [SolidJS](https://github.com/solidjs/solid). Unlike traditional frameworks that re-render entire components, `SolidUI` uses fine-grained reactivity to update only the specific UI properties that change, resulting in minimal overhead and maximum performance.
+This TypeScript `SolidUI` namespace provides a reactive UI framework for Battlefield Portal, inspired by
+[SolidJS](https://github.com/solidjs/solid). Unlike traditional frameworks that re-render entire components, `SolidUI`
+uses fine-grained reactivity to update only the specific UI properties that change, resulting in minimal overhead and
+maximum performance.
 
-`SolidUI` is a from-scratch implementation of reactive primitives (signals, effects, memos, stores) adapted for the Battlefield Portal environment. It uses a HyperScript-like factory function (`h`) instead of JSX/TSX, and integrates seamlessly with the [`UI`](../ui/README.md) module to create dynamic, reactive user interfaces. The module uses the `Logging` module for internal logging, allowing you to monitor effect errors and debug reactive system behavior.
+`SolidUI` is a from-scratch implementation of reactive primitives (signals, effects, memos, stores) adapted for the
+Battlefield Portal environment. It uses a HyperScript-like factory function (`h`) instead of JSX/TSX, and integrates
+seamlessly with the [`UI`](../ui/README.md) module to create dynamic, reactive user interfaces. The module uses the
+`Logging` module for internal logging, allowing you to monitor effect errors and debug reactive system behavior.
 
-> **Note** The `SolidUI` namespace is decoupled from the `UI` module but has been designed and tested with it. It assumes that UI objects have getters and setters for properties that need to be reactive.
+> **Note** The `SolidUI` namespace is decoupled from the `UI` module but has been designed and tested with it. It
+> assumes that UI objects have getters and setters for properties that need to be reactive.
 
 ### Example
 
@@ -1471,7 +1751,8 @@ setCount(10); // Logs: "Count is now: 10"
 dispose();
 ```
 
-**Note:** Effects created inside `SolidUI.h()` are automatically cleaned up when the UI element is deleted. You typically don't need to manually dispose of them unless creating standalone effects.
+**Note:** Effects created inside `SolidUI.h()` are automatically cleaned up when the UI element is deleted. You
+typically don't need to manually dispose of them unless creating standalone effects.
 
 **Example:**
 
@@ -1624,7 +1905,8 @@ SolidUI.onCleanup(() => {
 });
 ```
 
-**Note:** Cleanup functions registered via `onCleanup` inside `SolidUI.h()` are automatically called when the UI element's `delete()` method is invoked.
+**Note:** Cleanup functions registered via `onCleanup` inside `SolidUI.h()` are automatically called when the UI
+element's `delete()` method is invoked.
 
 **How Reactivity Works:**
 
@@ -1711,7 +1993,9 @@ SolidUI.h(MyButton, {
 **Important Notes:**
 
 - Properties that are functions are automatically made reactive
-- Properties that match the pattern `on[A-Z]` (start with lowercase "on" followed by an uppercase letter) are never made reactive and are always passed through as-is. This includes event handlers like `onClick`, `onHover`, `onDelete`, etc., but excludes properties like `onlyOnce`, `once`, or `online`
+- Properties that match the pattern `on[A-Z]` (start with lowercase "on" followed by an uppercase letter) are never made
+  reactive and are always passed through as-is. This includes event handlers like `onClick`, `onHover`, `onDelete`,
+  etc., but excludes properties like `onlyOnce`, `once`, or `online`
 - All reactive effects are automatically cleaned up when the UI element is deleted
 - You can mix static and reactive properties in the same props object
 
@@ -2037,7 +2321,8 @@ function createScoreboard(player: mod.Player): void {
 
 ### Real-World Example: Spawn UI
 
-This example is based on the [`FFASpawning`](../ffa-spawning/index.ts) module, demonstrating a complete reactive UI system.
+This example is based on the [`FFASpawning`](../ffa-spawning/index.ts) module, demonstrating a complete reactive UI
+system.
 
 ```ts
 function createSpawnUI(player: mod.Player): void {
@@ -2120,25 +2405,32 @@ SolidUI.h(MyButton, {
 });
 ```
 
-**Note:** Functional components receive props where values can be either static values or accessor functions (signals). The component can call accessors to get reactive values, but the props themselves are not automatically unwrapped.
+**Note:** Functional components receive props where values can be either static values or accessor functions (signals).
+The component can call accessors to get reactive values, but the props themselves are not automatically unwrapped.
 
 ## Known Limitations & Caveats
 
 ### UI Module Dependency
 
-While `SolidUI` is decoupled from the `UI` module, it assumes that UI objects have getters and setters for properties. It has only been tested with the `UI` module. Using it with other UI systems may require adaptation.
+While `SolidUI` is decoupled from the `UI` module, it assumes that UI objects have getters and setters for properties.
+It has only been tested with the `UI` module. Using it with other UI systems may require adaptation.
 
 ### Property Assignment
 
-`SolidUI.h()` uses property setters to update UI elements. If a property is read-only or doesn't have a setter, updates will fail silently (errors are caught). Ensure your UI objects have proper setters for reactive properties.
+`SolidUI.h()` uses property setters to update UI elements. If a property is read-only or doesn't have a setter, updates
+will fail silently (errors are caught). Ensure your UI objects have proper setters for reactive properties.
 
 ### Accessor Function Detection
 
-`SolidUI.h()` treats any function value as an accessor. If you need to pass a function as a static value (not reactive), you'll need to work around this. Properties that match the pattern `on[A-Z]` (start with lowercase "on" followed by an uppercase letter) are never made reactive. This includes event handlers like `onClick`, `onHover`, `onDelete`, etc., but excludes properties like `onlyOnce`, `once`, or `online`.
+`SolidUI.h()` treats any function value as an accessor. If you need to pass a function as a static value (not reactive),
+you'll need to work around this. Properties that match the pattern `on[A-Z]` (start with lowercase "on" followed by an
+uppercase letter) are never made reactive. This includes event handlers like `onClick`, `onHover`, `onDelete`, etc., but
+excludes properties like `onlyOnce`, `once`, or `online`.
 
 ### Store Updates
 
-Store updates must use the `setStore` function with a producer. Direct assignment to store properties (e.g., `store.value = 5`) works but may not trigger reactivity correctly in all cases. Always use the setter:
+Store updates must use the `setStore` function with a producer. Direct assignment to store properties (e.g.,
+`store.value = 5`) works but may not trigger reactivity correctly in all cases. Always use the setter:
 
 ```ts
 // ✅ Correct
@@ -2152,27 +2444,38 @@ store.value = 5;
 
 ### Effect Execution Order
 
-Effects execute in the order they were scheduled, but there's no guarantee of execution order across different signals. If you need specific ordering, chain effects manually or use a single effect.
+Effects execute in the order they were scheduled, but there's no guarantee of execution order across different signals.
+If you need specific ordering, chain effects manually or use a single effect.
 
 ### Effect Error Handling
 
-Effect errors are automatically caught and logged (if logging is configured via `SolidUI.setLogging()`) to prevent one failing effect from breaking the entire reactive system. Errors are logged at the `Error` log level. If you need additional error handling, implement it inside your effects.
+Effect errors are automatically caught and logged (if logging is configured via `SolidUI.setLogging()`) to prevent one
+failing effect from breaking the entire reactive system. Errors are logged at the `Error` log level. If you need
+additional error handling, implement it inside your effects.
 
 ### Memory Management
 
-Effects and subscriptions are automatically cleaned up when UI elements are deleted. However, if you create standalone effects or roots, you must manually dispose of them to prevent memory leaks.
+Effects and subscriptions are automatically cleaned up when UI elements are deleted. However, if you create standalone
+effects or roots, you must manually dispose of them to prevent memory leaks.
 
 ### Async Updates
 
-All reactive updates are asynchronous. If you need synchronous updates (not recommended), you'll need to use the underlying `UI` module directly.
+All reactive updates are asynchronous. If you need synchronous updates (not recommended), you'll need to use the
+underlying `UI` module directly.
 
 ---
 
 ## Module: sounds
 
-This TypeScript `Sounds` namespace abstracts away and handles the nuance, oddities, and pitfalls that come with playing sounds at runtime in Battlefield Portal experiences. The module provides efficient sound object management through automatic pooling and reuse, handles different playback scenarios (2D global, 2D per-player/squad/team, and 3D positional with optional target filtering), manages sound durations automatically, and provides manual control when needed.
+This TypeScript `Sounds` namespace abstracts away and handles the nuance, oddities, and pitfalls that come with playing
+sounds at runtime in Battlefield Portal experiences. The module provides efficient sound object management through
+automatic pooling and reuse, handles different playback scenarios (2D global, 2D per-player/squad/team, and 3D
+positional with optional target filtering), manages sound durations automatically, and provides manual control when
+needed.
 
-Key features include automatic sound object reuse to minimize spawn overhead, intelligent availability tracking to prevent sound conflicts, automatic stopping after specified durations, and support for infinite-duration sounds (e.g., looping assets).
+Key features include automatic sound object reuse to minimize spawn overhead, intelligent availability tracking to
+prevent sound conflicts, automatic stopping after specified durations, and support for infinite-duration sounds (e.g.,
+looping assets).
 
 ### Example
 
@@ -2252,17 +2555,31 @@ export async function OnPlayerDied(
 }
 ```
 
-- **Infinite Duration Objects** – Sound objects with infinite duration (`duration: 0`) remain in the `active` set until manually stopped. **Important:** For infinite-duration sounds, you must keep a reference to the returned stop function so you can call it when needed. Without this reference, the sound will play indefinitely (whether or not it's actually making sound, as it might not be a looping asset) and the underlying `SoundObject` cannot be freed or reused, effectively leaking resources. While the resource cost is small, this can accumulate over time if many infinite-duration sounds are started without proper cleanup.
+- **Infinite Duration Objects** – Sound objects with infinite duration (`duration: 0`) remain in the `active` set until
+  manually stopped. **Important:** For infinite-duration sounds, you must keep a reference to the returned stop function
+  so you can call it when needed. Without this reference, the sound will play indefinitely (whether or not it's actually
+  making sound, as it might not be a looping asset) and the underlying `SoundObject` cannot be freed or reused,
+  effectively leaking resources. While the resource cost is small, this can accumulate over time if many
+  infinite-duration sounds are started without proper cleanup.
 
-- **Concurrent Playback** – The system allows multiple instances of sounds to play simultaneously for a given location or target. If you need to prevent overlapping sounds, you'll need to implement that logic yourself.
+- **Concurrent Playback** – The system allows multiple instances of sounds to play simultaneously for a given location
+  or target. If you need to prevent overlapping sounds, you'll need to implement that logic yourself.
 
 ---
 
 ## Module: timers
 
-This TypeScript `Timers` namespace provides `setTimeout` and `setInterval` functionality for Battlefield Portal experiences which run in a QuickJS runtime, which does not natively include these standard JavaScript timing functions. The module uses Battlefield Portal's `mod.Wait()` API internally to implement timer behavior, tracks active timers with unique IDs, and provides error handling to ensure robust timer execution.
+This TypeScript `Timers` namespace provides `setTimeout` and `setInterval` functionality for Battlefield Portal
+experiences which run in a QuickJS runtime, which does not natively include these standard JavaScript timing functions.
+The module uses Battlefield Portal's `mod.Wait()` API internally to implement timer behavior, tracks active timers with
+unique IDs, and provides error handling to ensure robust timer execution.
 
-**Why use Timers instead of `mod.Wait()`?** The `Timers` module offers significant advantages: timers can be cancelled with `clearTimeout()`/`clearInterval()`, multiple timers can run concurrently without blocking, automatic error handling prevents timer failures from crashing your mod, and the familiar JavaScript API makes code more readable and maintainable. Ideal for periodic tasks, delayed actions, debouncing, and any scenario where you need cancellable or recurring delays. See the [Comparing Timers to mod.Wait()](#comparing-timers-to-modwait) section below for a detailed comparison.
+**Why use Timers instead of `mod.Wait()`?** The `Timers` module offers significant advantages: timers can be cancelled
+with `clearTimeout()`/`clearInterval()`, multiple timers can run concurrently without blocking, automatic error handling
+prevents timer failures from crashing your mod, and the familiar JavaScript API makes code more readable and
+maintainable. Ideal for periodic tasks, delayed actions, debouncing, and any scenario where you need cancellable or
+recurring delays. See the [Comparing Timers to mod.Wait()](#comparing-timers-to-modwait) section below for a detailed
+comparison.
 
 ### Example
 
@@ -2347,9 +2664,17 @@ export async function OnGameModeStarted(): Promise<void> {
 
 ## Module: ui
 
-This TypeScript `UI` namespace wraps Battlefield Portal's `mod` UI APIs with an object-oriented interface, providing strongly typed helpers, convenient defaults, ergonomic getters/setters, and automatic management of various UI mechanics for building complex HUDs, panels, and interactive buttons. The module subscribes to `OnPlayerUIButtonEvent` via the `Events` module at load time, so button events are dispatched automatically and you must use the `Events` module for all other game event subscription.
+This TypeScript `UI` namespace wraps Battlefield Portal's `mod` UI APIs with an object-oriented interface, providing
+strongly typed helpers, convenient defaults, ergonomic getters/setters, and automatic management of various UI mechanics
+for building complex HUDs, panels, and interactive buttons. The module subscribes to `OnPlayerUIButtonEvent` via the
+`Events` module at load time, so button events are dispatched automatically and you must use the `Events` module for all
+other game event subscription.
 
-> **Note** You **must** use the `Events` module as your only mechanism to subscribe to game events. Do not implement or export any Battlefield Portal event handler functions (`OnPlayerUIButtonEvent`, `OnPlayerDeployed`, etc.) in your code. The `Events` module owns those hooks and this module relies on it; only one implementation of each event handler can exist per project. See the [Events module — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
+> **Note** You **must** use the `Events` module as your only mechanism to subscribe to game events. Do not implement or
+> export any Battlefield Portal event handler functions (`OnPlayerUIButtonEvent`, `OnPlayerDeployed`, etc.) in your
+> code. The `Events` module owns those hooks and this module relies on it; only one implementation of each event handler
+> can exist per project. See the
+> [Events module — Known Limitations & Caveats](../events/README.md#known-limitations--caveats).
 
 ### Example
 
@@ -2468,7 +2793,8 @@ text.setX(10).setY(20).setWidth(100).setHeight(50).show();
 
 ### Parent-Child Management Example
 
-Elements automatically manage parent-child relationships. When you create an element with a parent, move it between parents, or delete it, the parent's `children` array is automatically updated:
+Elements automatically manage parent-child relationships. When you create an element with a parent, move it between
+parents, or delete it, the parent's `children` array is automatically updated:
 
 ```ts
 import { UIContainer } from 'bf6-portal-utils/ui/components/container';
@@ -2502,19 +2828,30 @@ console.log(container2.children.length); // 0 (automatically removed)
 
 ### Custom UI Elements
 
-Custom elements (like checkboxes, dropdowns, clocks, progress bars, etc.) can be built by extending the `Element` class and accepting a `params` object that extends the `ElementParams` interface as the sole argument to their constructor. They can use the protected `_logging` member to log messages within the UI namespace, and should use `_isDeletedCheck()` to protect setter operations from being called on deleted elements. Custom button-like components should implement the `Button` interface and register themselves using `UI.registerButton()` during construction.
+Custom elements (like checkboxes, dropdowns, clocks, progress bars, etc.) can be built by extending the `Element` class
+and accepting a `params` object that extends the `ElementParams` interface as the sole argument to their constructor.
+They can use the protected `_logging` member to log messages within the UI namespace, and should use `_isDeletedCheck()`
+to protect setter operations from being called on deleted elements. Custom button-like components should implement the
+`Button` interface and register themselves using `UI.registerButton()` during construction.
 
 ### Element Behavior Conventions
 
-The following behaviors apply to the built-in UI elements in this repository. Custom elements that extend `Element` should ideally implement these conventions for consistency, but doing so is not guaranteed. Custom implementations may differ, and edge cases may exist.
+The following behaviors apply to the built-in UI elements in this repository. Custom elements that extend `Element`
+should ideally implement these conventions for consistency, but doing so is not guaranteed. Custom implementations may
+differ, and edge cases may exist.
 
-- **Parent-Child Relationships**: When you create child elements via `childrenParams` (on containers), they automatically receive the container as their parent. When you instantiate a child element with a parent, it's automatically added to the parent's `children` array. The parent's `children` array is automatically maintained.
+- **Parent-Child Relationships**: When you create child elements via `childrenParams` (on containers), they
+  automatically receive the container as their parent. When you instantiate a child element with a parent, it's
+  automatically added to the parent's `children` array. The parent's `children` array is automatically maintained.
 
-- **Recursive Deletion**: Calling `delete()` on a container recursively deletes all child elements before deleting the container itself.
+- **Recursive Deletion**: Calling `delete()` on a container recursively deletes all child elements before deleting the
+  container itself.
 
-- **Children Storage**: Children are stored internally as a `Set<Element>` but exposed as an array via the `children` getter.
+- **Children Storage**: Children are stored internally as a `Set<Element>` but exposed as an array via the `children`
+  getter.
 
-- **Receiver Inheritance**: Child elements automatically inherit their parent's receiver unless explicitly specified in their constructor parameters.
+- **Receiver Inheritance**: Child elements automatically inherit their parent's receiver unless explicitly specified in
+  their constructor parameters.
 
 **Method Chaining Example:**
 
@@ -2544,7 +2881,10 @@ container
 
 ## UI Input Mode Management
 
-The `uiInputModeWhenVisible` property provides automatic management of UI input mode (which is what allows a player to click on UI buttons), eliminating the need to manually call `mod.EnableUIInputMode` in most cases. When enabled on an element, the UI module automatically handles enabling and disabling UI input mode based on the element's visibility state.
+The `uiInputModeWhenVisible` property provides automatic management of UI input mode (which is what allows a player to
+click on UI buttons), eliminating the need to manually call `mod.EnableUIInputMode` in most cases. When enabled on an
+element, the UI module automatically handles enabling and disabling UI input mode based on the element's visibility
+state.
 
 ### Usage Example
 
@@ -2595,36 +2935,61 @@ menu.uiInputModeWhenVisible = true; // Re-enable automatic management
 
 ### When to Use
 
-- **Enable `uiInputModeWhenVisible`** only on elements that you actually intend to toggle between visible and not visible. For example, if you have a container with 4 buttons and only the container's visibility will change, set `uiInputModeWhenVisible: true` only on the container, not on the individual buttons.
-- **Disable `uiInputModeWhenVisible`** (default) for elements that won't have their visibility toggled, or when you prefer to manage UI input mode manually (not recommended).
-- For complex UIs with multiple interactive sections, you can enable it on parent containers to manage input mode for entire UI hierarchies.
+- **Enable `uiInputModeWhenVisible`** only on elements that you actually intend to toggle between visible and not
+  visible. For example, if you have a container with 4 buttons and only the container's visibility will change, set
+  `uiInputModeWhenVisible: true` only on the container, not on the individual buttons.
+- **Disable `uiInputModeWhenVisible`** (default) for elements that won't have their visibility toggled, or when you
+  prefer to manage UI input mode manually (not recommended).
+- For complex UIs with multiple interactive sections, you can enable it on parent containers to manage input mode for
+  entire UI hierarchies.
 
 ### Notes
 
 - The default value is `false`. Enable it explicitly when needed.
 - The property can be changed at runtime via the getter/setter or `setUiInputModeWhenVisible()` method.
-- The system may not work correctly if you try to manually enable or disable UI input mode with `mod.EnableUIInputMode` in any scope, since there is no way to query the runtime to determine the current UI input mode state. It's best to let the UI system handle it entirely. Alternatively, you can choose to handle UI input mode entirely yourself, as long as you do not have any elements with `uiInputModeWhenVisible` enabled.
+- The system may not work correctly if you try to manually enable or disable UI input mode with `mod.EnableUIInputMode`
+  in any scope, since there is no way to query the runtime to determine the current UI input mode state. It's best to
+  let the UI system handle it entirely. Alternatively, you can choose to handle UI input mode entirely yourself, as long
+  as you do not have any elements with `uiInputModeWhenVisible` enabled.
 - Elements inherit their receiver from their parent, so UI input mode management respects the receiver hierarchy.
 
 ## Event Wiring & Lifecycle
 
-- The UI module subscribes to `OnPlayerUIButtonEvent` via the `Events` module at load time, so button presses are dispatched automatically.
+- The UI module subscribes to `OnPlayerUIButtonEvent` via the `Events` module at load time, so button presses are
+  dispatched automatically.
 - Use the returned `Element` helpers to hide/show instead of calling `mod.SetUIWidgetVisible` manually.
-- All properties support both normal setter syntax (e.g., `element.bgAlpha = 0.8;`) and method chaining (e.g., `element.setBgAlpha(0.8).show()`). Method chaining is useful when you want to apply multiple changes in sequence.
-- Always call `delete()` when removing widgets to prevent stale references inside Battlefield Portal. The element will automatically be removed from its parent's `children` array. For containers, `delete()` recursively deletes all children before deleting the container itself.
-- The `parent` property in parameter interfaces must be a `UI.Parent` (i.e., `UI.Root` or `UI.Container`). Parent-child relationships are automatically managed.
+- All properties support both normal setter syntax (e.g., `element.bgAlpha = 0.8;`) and method chaining (e.g.,
+  `element.setBgAlpha(0.8).show()`). Method chaining is useful when you want to apply multiple changes in sequence.
+- Always call `delete()` when removing widgets to prevent stale references inside Battlefield Portal. The element will
+  automatically be removed from its parent's `children` array. For containers, `delete()` recursively deletes all
+  children before deleting the container itself.
+- The `parent` property in parameter interfaces must be a `UI.Parent` (i.e., `UI.Root` or `UI.Container`). Parent-child
+  relationships are automatically managed.
 - **Parent-child relationships** are automatically maintained:
-    - When an element is created with a parent, it's automatically added to the parent's `children` Set via `attachChild()`. Children are stored internally as a `Set<Element>` but exposed as an array via the `children` getter.
-    - When an element's `parent` is changed (via setter or `setParent()`), it's removed from the old parent's children via `detachChild()` and added to the new parent's children via `attachChild()`.
+    - When an element is created with a parent, it's automatically added to the parent's `children` Set via
+      `attachChild()`. Children are stored internally as a `Set<Element>` but exposed as an array via the `children`
+      getter.
+    - When an element's `parent` is changed (via setter or `setParent()`), it's removed from the old parent's children
+      via `detachChild()` and added to the new parent's children via `attachChild()`.
     - When an element is deleted, it's automatically removed from its parent's `children` Set via `detachChild()`.
-- **Receiver inheritance**: Elements automatically adopt their parent's receiver if a receiver is not explicitly specified in constructor parameters. The `getReceiver()` utility function handles this logic, checking the parent's receiver and using it if no receiver is provided. Console warnings are displayed if an element's receiver is incompatible with its parent's receiver.
-- **Deleted element protection**: Once an element is deleted (via `delete()`), the `_deleted` flag is set to `true` and all setter operations are blocked using `_isDeletedCheck()`. Attempts to modify deleted elements will log a warning and return early without performing the operation.
+- **Receiver inheritance**: Elements automatically adopt their parent's receiver if a receiver is not explicitly
+  specified in constructor parameters. The `getReceiver()` utility function handles this logic, checking the parent's
+  receiver and using it if no receiver is provided. Console warnings are displayed if an element's receiver is
+  incompatible with its parent's receiver.
+- **Deleted element protection**: Once an element is deleted (via `delete()`), the `_deleted` flag is set to `true` and
+  all setter operations are blocked using `_isDeletedCheck()`. Attempts to modify deleted elements will log a warning
+  and return early without performing the operation.
 
 ---
 
 ## Module: button
 
-The `UIButton` component creates an interactive button widget. Buttons support multiple visual states (base, disabled, pressed, hover, focused) with customizable colors and opacities for each state. Buttons automatically register themselves with the UI system so their `onClick` handlers are called when pressed. The `onClick` handler may be synchronous or asynchronous; while asynchronous handlers are generally preferred elsewhere (e.g. to avoid blocking event stacks), for `UIButton` the only handler running for the source event is this button's `onClick` (due to unique global button referencing), so synchronous callbacks—even long-running ones—are safe.
+The `UIButton` component creates an interactive button widget. Buttons support multiple visual states (base, disabled,
+pressed, hover, focused) with customizable colors and opacities for each state. Buttons automatically register
+themselves with the UI system so their `onClick` handlers are called when pressed. The `onClick` handler may be
+synchronous or asynchronous; while asynchronous handlers are generally preferred elsewhere (e.g. to avoid blocking event
+stacks), for `UIButton` the only handler running for the source event is this button's `onClick` (due to unique global
+button referencing), so synchronous callbacks—even long-running ones—are safe.
 
 ## Quick Start
 
@@ -2650,7 +3015,8 @@ button.setEnabled(false).setBaseColor(UI.COLORS.BLUE).setPressedColor(UI.COLORS.
 
 ## Module: container
 
-The `UIContainer` component creates a container widget that can hold child elements. Containers are useful for grouping UI elements together and managing their layout as a single unit.
+The `UIContainer` component creates a container widget that can hold child elements. Containers are useful for grouping
+UI elements together and managing their layout as a single unit.
 
 ```ts
 import { UIContainer } from 'bf6-portal-utils/ui/components/container';
@@ -2684,7 +3050,9 @@ container.delete();
 
 ### `UIContainer.ChildParams<T extends UI.ElementParams>`
 
-Generic type for child element parameters in `childrenParams`. The type parameter must extend `ElementParams`. The `type` property must be set to the class constructor. This generic type enables developers to create custom UI elements (like checkboxes, dropdowns, clocks, progress bars, etc.) that integrate seamlessly with the existing UI system.
+Generic type for child element parameters in `childrenParams`. The type parameter must extend `ElementParams`. The
+`type` property must be set to the class constructor. This generic type enables developers to create custom UI elements
+(like checkboxes, dropdowns, clocks, progress bars, etc.) that integrate seamlessly with the existing UI system.
 
 ```ts
 type ChildParams<T extends UI.ElementParams> = T & {
@@ -2713,7 +3081,9 @@ const container = new UIContainer({
 
 ## Module: container-button
 
-The `UIContainerButton` component creates a button that contains a `UIContainer` as its content. This allows you to create interactive buttons that can hold child elements, enabling complex nested UI structures within a clickable button.
+The `UIContainerButton` component creates a button that contains a `UIContainer` as its content. This allows you to
+create interactive buttons that can hold child elements, enabling complex nested UI structures within a clickable
+button.
 
 ```ts
 import { UIContainerButton } from 'bf6-portal-utils/ui/components/container-button';
@@ -2753,13 +3123,17 @@ console.log(innerContainer.children.length); // 2
 
 ## Usage Notes
 
-- **Inner Container Access**: Use the `innerContainer` property to access the container that holds child elements. You can use this to manage children, check the children array, etc.
+- **Inner Container Access**: Use the `innerContainer` property to access the container that holds child elements. You
+  can use this to manage children, check the children array, etc.
 
-- **Child Management**: Children added via `childrenParams` are automatically added to the inner container, not the button itself. Use `innerContainer.children` to access them.
+- **Child Management**: Children added via `childrenParams` are automatically added to the inner container, not the
+  button itself. Use `innerContainer.children` to access them.
 
-- **Size Synchronization**: Setting `width`, `height`, or `size` automatically updates all three layers (outer container, button, and inner container), ensuring they stay in sync.
+- **Size Synchronization**: Setting `width`, `height`, or `size` automatically updates all three layers (outer
+  container, button, and inner container), ensuring they stay in sync.
 
-- **Padding**: The component supports padding, which creates space between the button border and the inner container. The inner container's size is automatically adjusted to account for padding.
+- **Padding**: The component supports padding, which creates space between the button border and the inner container.
+  The inner container's size is automatically adjusted to account for padding.
 
 - **Method Chaining**: All setter methods return `this`, allowing you to chain multiple operations together.
 
@@ -2767,9 +3141,13 @@ console.log(innerContainer.children.length); // 2
 
 ## Module: content-button
 
-The `UIContentButton` is an abstract base class for buttons that contain content elements (such as text or images). It handles the common pattern of wrapping a `UIButton` and a content element in a `UIContainer`, managing their layout, and delegating properties appropriately. It is need because natively (via the `mod` namespace UI widget system) only containers can be parents and have children.
+The `UIContentButton` is an abstract base class for buttons that contain content elements (such as text or images). It
+handles the common pattern of wrapping a `UIButton` and a content element in a `UIContainer`, managing their layout, and
+delegating properties appropriately. It is need because natively (via the `mod` namespace UI widget system) only
+containers can be parents and have children.
 
-This class is not meant to be instantiated directly. Instead, use concrete implementations like `UITextButton` which extends this class, or build you own buttons with content by extending this class.
+This class is not meant to be instantiated directly. Instead, use concrete implementations like `UITextButton` which
+extends this class, or build you own buttons with content by extending this class.
 
 ## Architecture
 
@@ -2789,7 +3167,8 @@ The class automatically:
 
 ## Constructor
 
-The constructor is `protected` and should not be called directly. Concrete implementations should call `super()` with appropriate parameters.
+The constructor is `protected` and should not be called directly. Concrete implementations should call `super()` with
+appropriate parameters.
 
 ```ts
 protected constructor(
@@ -2802,18 +3181,23 @@ protected constructor(
 **Parameters:**
 
 - `params` – The parameters for the content button, including all `UIButton.Params` plus optional `padding`
-- `createContent` – A factory function that creates the content element given a parent and a prescribed inner width and height
+- `createContent` – A factory function that creates the content element given a parent and a prescribed inner width and
+  height
 - `contentProperties` – An array of property names to delegate from the content element to the instance
 
 ## Usage Notes
 
-- **Padding Handling**: When padding is set, the content element's size is automatically reduced by `padding * 2` (once for each side) to account for the padding space.
+- **Padding Handling**: When padding is set, the content element's size is automatically reduced by `padding * 2` (once
+  for each side) to account for the padding space.
 
-- **Size Synchronization**: Setting `width`, `height`, or `size` automatically updates all three layers (container, button, and content), ensuring they stay in sync.
+- **Size Synchronization**: Setting `width`, `height`, or `size` automatically updates all three layers (container,
+  button, and content), ensuring they stay in sync.
 
-- **Property Delegation**: Properties are delegated using `UI.delegateProperties()`, which creates getters, setters, and setter methods (e.g., `setPropertyName`) for each property.
+- **Property Delegation**: Properties are delegated using `UI.delegateProperties()`, which creates getters, setters, and
+  setter methods (e.g., `setPropertyName`) for each property.
 
-- **Internal Elements**: The internal button and content elements are not exposed as public properties. Access them through the delegated properties instead.
+- **Internal Elements**: The internal button and content elements are not exposed as public properties. Access them
+  through the delegated properties instead.
 
 - **Method Chaining**: All setter methods return `this`, allowing you to chain multiple operations together.
 
@@ -2821,7 +3205,8 @@ protected constructor(
 
 ## Module: gadget-image
 
-The `UIGadgetImage` component creates a widget that displays an image of a gadget (equipment item). Gadget images are useful for displaying equipment icons in the UI, such as in inventory screens or equipment selection menus.
+The `UIGadgetImage` component creates a widget that displays an image of a gadget (equipment item). Gadget images are
+useful for displaying equipment icons in the UI, such as in inventory screens or equipment selection menus.
 
 ```ts
 import { UIGadgetImage } from 'bf6-portal-utils/ui/components/gadget-image';
@@ -2839,7 +3224,9 @@ const gadgetImage = new UIGadgetImage({
 
 ## Module: gadget-image-button
 
-The `UIGadgetImageButton` component creates a button with an integrated gadget image. It combines `UIButton` and `UIGadgetImage` functionality into a single element, wrapping both in a container and delegating properties appropriately.
+The `UIGadgetImageButton` component creates a button with an integrated gadget image. It combines `UIButton` and
+`UIGadgetImage` functionality into a single element, wrapping both in a container and delegating properties
+appropriately.
 
 ```ts
 import { UIGadgetImageButton } from 'bf6-portal-utils/ui/components/gadget-image-button';
@@ -2864,7 +3251,8 @@ button.setEnabled(false).setBaseColor(UI.COLORS.BLUE);
 
 ## Module: image
 
-The `UIImage` component creates a widget that displays an image. Images are useful for displaying icons, graphics, or other visual elements in the UI.
+The `UIImage` component creates a widget that displays an image. Images are useful for displaying icons, graphics, or
+other visual elements in the UI.
 
 ```ts
 import { UIImage } from 'bf6-portal-utils/ui/components/image';
@@ -2888,7 +3276,9 @@ image.setImageType(mod.UIImageType.Icon).setImageColor(UI.COLORS.BLUE).setImageA
 
 ## Module: image-button
 
-The `UIImageButton` component creates a button with an integrated image. It combines `UIButton` and `UIImage` functionality into a single element, wrapping both in a container and delegating properties appropriately. The image automatically updates its appearance when the button is enabled or disabled.
+The `UIImageButton` component creates a button with an integrated image. It combines `UIButton` and `UIImage`
+functionality into a single element, wrapping both in a container and delegating properties appropriately. The image
+automatically updates its appearance when the button is enabled or disabled.
 
 ```ts
 import { UIImageButton } from 'bf6-portal-utils/ui/components/image-button';
@@ -2914,7 +3304,8 @@ button.setImageType(mod.UIImageType.CrownSolid).setImageColor(UI.COLORS.BLUE).se
 
 ## Module: text
 
-The `UIText` component creates a text widget for displaying text labels in the UI. Text elements support customizable font size, color, opacity, alignment, and padding.
+The `UIText` component creates a text widget for displaying text labels in the UI. Text elements support customizable
+font size, color, opacity, alignment, and padding.
 
 ```ts
 import { UIText } from 'bf6-portal-utils/ui/components/text';
@@ -2937,9 +3328,11 @@ text.setMessage(mod.Message(mod.stringkeys.labels.updatedText)) // 'Updated Text
 
 ## Usage Notes
 
-- **Message Opaqueness**: `mod.Message` is opaque and cannot be unpacked into a string. You can only create messages using `mod.Message()` with numbers, `mod.Player` types, or strings in `mod.stringkeys`.
+- **Message Opaqueness**: `mod.Message` is opaque and cannot be unpacked into a string. You can only create messages
+  using `mod.Message()` with numbers, `mod.Player` types, or strings in `mod.stringkeys`.
 
-- **Padding**: Unlike the base `Element` class, `UIText` supports padding. This allows you to add space around the text content.
+- **Padding**: Unlike the base `Element` class, `UIText` supports padding. This allows you to add space around the text
+  content.
 
 - **Method Chaining**: All setter methods return `this`, allowing you to chain multiple operations together.
 
@@ -2947,7 +3340,9 @@ text.setMessage(mod.Message(mod.stringkeys.labels.updatedText)) // 'Updated Text
 
 ## Module: text-button
 
-The `UITextButton` component creates a button with integrated text content. It combines `UIButton` and `UIText` functionality into a single element, wrapping both in a container and delegating properties appropriately. The text automatically updates its appearance when the button is enabled or disabled.
+The `UITextButton` component creates a button with integrated text content. It combines `UIButton` and `UIText`
+functionality into a single element, wrapping both in a container and delegating properties appropriately. The text
+automatically updates its appearance when the button is enabled or disabled.
 
 ```ts
 import { UITextButton } from 'bf6-portal-utils/ui/components/text-button';
@@ -2973,11 +3368,14 @@ button
 
 ## Usage Notes
 
-- **Automatic Text State Management**: When the button's `enabled` state changes, the text automatically switches between `textColor`/`textAlpha` (enabled) and `textDisabledColor`/`textDisabledAlpha` (disabled).
+- **Automatic Text State Management**: When the button's `enabled` state changes, the text automatically switches
+  between `textColor`/`textAlpha` (enabled) and `textDisabledColor`/`textDisabledAlpha` (disabled).
 
-- **Size Synchronization**: Setting `width`, `height`, or `size` automatically updates the button widget and text size, accounting for padding.
+- **Size Synchronization**: Setting `width`, `height`, or `size` automatically updates the button widget and text size,
+  accounting for padding.
 
-- **Padding**: The component supports padding, which creates space between the button border and the text content. The text size is automatically adjusted to account for padding.
+- **Padding**: The component supports padding, which creates space between the button border and the text content. The
+  text size is automatically adjusted to account for padding.
 
 - **Method Chaining**: All setter methods return `this`, allowing you to chain multiple operations together.
 
@@ -2985,7 +3383,8 @@ button
 
 ## Module: weapon-image
 
-The `UIWeaponImage` component creates a widget that displays an image of a weapon. Weapon images are useful for displaying weapon icons in the UI, such as in weapon selection menus or loadout screens.
+The `UIWeaponImage` component creates a widget that displays an image of a weapon. Weapon images are useful for
+displaying weapon icons in the UI, such as in weapon selection menus or loadout screens.
 
 ```ts
 import { UIWeaponImage } from 'bf6-portal-utils/ui/components/weapon-image';
@@ -3010,15 +3409,23 @@ const weaponImage = new UIWeaponImage({
 
 ## Module: weapon-image-button
 
-The `UIWeaponImageButton` component creates a button with an integrated weapon image. It combines `UIButton` and `UIWeaponImage` functionality into a single element, wrapping both in a container and delegating properties appropriately.
+The `UIWeaponImageButton` component creates a button with an integrated weapon image. It combines `UIButton` and
+`UIWeaponImage` functionality into a single element, wrapping both in a container and delegating properties
+appropriately.
 
 ---
 
 ## Module: vectors
 
-The `Vectors` namespace provides a small set of helpers for working with 3D vectors in Battlefield Portal experiences. Because `mod.Vector` is opaque—you must use the functional `mod` API (`mod.XComponentOf`, `mod.YComponentOf`, `mod.ZComponentOf`, `mod.CreateVector`, `mod.VectorAdd`, etc.) to read or build vectors—it can be clunky to write and reason about vector math. This module defines a transparent `Vector3` type (`{ x, y, z }`) and complementary functions so you can work with plain objects when convenient, and convert to or from `mod.Vector` only when calling Portal APIs.
+The `Vectors` namespace provides a small set of helpers for working with 3D vectors in Battlefield Portal experiences.
+Because `mod.Vector` is opaque—you must use the functional `mod` API (`mod.XComponentOf`, `mod.YComponentOf`,
+`mod.ZComponentOf`, `mod.CreateVector`, `mod.VectorAdd`, etc.) to read or build vectors—it can be clunky to write and
+reason about vector math. This module defines a transparent `Vector3` type (`{ x, y, z }`) and complementary functions
+so you can work with plain objects when convenient, and convert to or from `mod.Vector` only when calling Portal APIs.
 
-Key features include conversion between `Vector3` and `mod.Vector`, arithmetic (add, subtract, multiply, divide), distance, truncation, degree/radian and rotation helpers, string formatting for debugging, and a type guard `isVector3()`. The namespace is self-contained and has no dependencies on other `bf6-portal-utils` modules.
+Key features include conversion between `Vector3` and `mod.Vector`, arithmetic (add, subtract, multiply, divide),
+distance, truncation, degree/radian and rotation helpers, string formatting for debugging, and a type guard
+`isVector3()`. The namespace is self-contained and has no dependencies on other `bf6-portal-utils` modules.
 
 ### Example
 

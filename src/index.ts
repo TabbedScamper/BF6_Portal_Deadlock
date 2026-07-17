@@ -5,10 +5,2226 @@ import { MapDetector } from 'bf6-portal-utils/map-detector/index.ts';
 import { Vectors } from 'bf6-portal-utils/vectors/index.ts';
 
 import { DebugTool } from './debug-tool/index.ts';
-import { getPlayerStateVectorString } from './helpers/index.ts';
+import { PLAYERS_PER_TEAM, DEBUG_MODE, DEBUG_TEAM_SIZE } from './config.ts';
+import {
+    getPlayerStateVectorString,
+    getPlayersOnTeam,
+    getAlivePlayersOnTeam,
+    rejectPlayer,
+    clearRejectedPlayers,
+    logHelperStats,
+    removeAllEquipment,
+} from './helpers/index.ts';
+
+// Bot AI system - realistic awareness without omniscience
+import { getBotBrain, resetBotBrain, clearAllBotBrains, tickAllBotBrains, logBrainStats } from './bot-ai/index.ts';
+
+// Structured telemetry -> PortalLog (the "MCP-like" live view). See telemetry/index.ts.
+import { Tlm, startPerfHeartbeat } from './telemetry/index.ts';
+
+// Bot line-of-sight (raycast round-robin) so bots don't see through walls. See bot-ai/los.ts.
+import { updateLos, onRayHit, onRayMiss, clearLos, getLosCastCount } from './bot-ai/los.ts';
+
+// ========== DEBUG LOGGING FOR MAIN GAME LOOP ==========
+const DEBUG_MAIN = false;
+let _roundStarts = 0;
+let _roundEnds = 0;
+let _playerDeaths = 0;
+let _playerDeploys = 0;
+let _eliminationChecks = 0;
+let _botTargetUpdates = 0;
+
+function logMain(msg: string, ...args: any[]): void {
+    if (DEBUG_MAIN) console.log(`[MAIN] ${msg}`, ...args);
+}
+
+// Call this periodically to see helper call frequency
+let _helperStatsInterval: number | null = null;
+function startHelperStatsLogging(): void {
+    if (_helperStatsInterval) return;
+    _helperStatsInterval = Timers.setInterval(() => {
+        logHelperStats();
+        logBrainStats(); // Log bot brain stats
+        logMain('MAIN STATS:', {
+            roundStarts: _roundStarts,
+            roundEnds: _roundEnds,
+            playerDeaths: _playerDeaths,
+            playerDeploys: _playerDeploys,
+            eliminationChecks: _eliminationChecks,
+            botTargetUpdates: _botTargetUpdates,
+        });
+    }, 5000);
+}
+// ======================================================
+import {
+    CountdownUI,
+    type Loadout,
+    TeamHealthUI,
+    showRoundResults,
+    showRoundDraw,
+    hideAllRoundResults,
+    resetScores,
+    getScores,
+    showEliminationEffect,
+    hideEliminationEffect,
+    resetEliminationTracking,
+    FlagCaptureUI,
+} from './gunfight/index.ts';
+
+// ============================================================================
+// PRODUCTION MODE - Set to true to disable debug tools
+// ============================================================================
+const PRODUCTION_MODE = true;
+
+// ============================================================================
+// TEAM BALANCING CONFIGURATION
+// ============================================================================
+// CUSTOM BOT CONFIGURATION
+// ============================================================================
+// Enable/disable custom backfill bots (set to false to use Portal default bots)
+const ENABLE_CUSTOM_BOTS = true;
+// PLAYERS_PER_TEAM is imported from config.ts (change it there)
+// Targeting update interval (every 500ms for more responsive bots)
+const BOT_TARGET_UPDATE_MS = 150; // targeting cadence; snappier reaction (roster is small, ~0.5ms/tick)
+// Bot unspawn delay after death (seconds)
+const BOT_UNSPAWN_DELAY = 2;
+// Delay before bots start chance-based targeting (after initial target)
+const BOT_INITIAL_TARGET_DURATION_MS = 4000;
+// Chance to retarget nearest enemy each update (40%)
+const BOT_RETARGET_CHANCE = 0.4;
+// Chance to actively move toward target each update (30%)
+const BOT_MOVE_TOWARD_CHANCE = 0.3;
+// Chance to move toward flag when it spawns (80%)
+const BOT_FLAG_INTEREST_CHANCE = 0.8;
+// ============================================================================
 
 let adminDebugTool: DebugTool | undefined;
 let telemetryInterval: number | undefined;
+let countdownUI: CountdownUI | undefined;
+let flagCaptureUI: FlagCaptureUI | undefined;
+let roundNumber = 0;
+let roundStarted = false;
+let currentLoadout: Loadout | undefined;
+let resettingRound = false;
+let roundEnding = false;
+let matchEnding = false; // Prevents any new rounds from starting when match is won
+let lastKiller: mod.Player | null = null;
+
+// Custom bot tracking (spawners only - bots found dynamically via getBotsOnTeam)
+let botTargetingInterval: number | null = null;
+let losInterval: number | null = null;
+let team1Spawners: mod.Spawner[] = [];
+let team2Spawners: mod.Spawner[] = [];
+let knownBotIds: Set<number> = new Set(); // Track bot IDs to avoid playing sounds for them
+
+// Bot AI state
+let botInitialTargetPhase = false; // True during first 5 seconds after countdown
+let botFlagActive = false; // True when overtime flag is spawned
+let botFlagSpawnTime = 0; // Timestamp when flag spawned (for urgency calculation)
+let botsInterestedInFlag: Set<number> = new Set(); // Bot IDs that rolled to go to flag (legacy, unused)
+
+// Spawn positions from spatial objects (IDs 1,2 for side 1 and IDs 3,4 for side 2)
+// Expanded to 4 positions per side via 1m offsets for 3v3/4v4 support
+let side1SpawnPositions: mod.Vector[] = [];
+let side2SpawnPositions: mod.Vector[] = [];
+let spawnPositionsInitialized = false;
+let sidesSwapped = false;
+
+// Track used spawn positions per team (reset each round)
+let team1SpawnIndex = 0;
+let team2SpawnIndex = 0;
+
+// Track players already teleported this round (prevents double-teleport)
+let teleportedThisRound: Set<number> = new Set();
+
+// Get next spawn position for a team (sequential assignment)
+function getNextSpawnPosition(teamId: number): mod.Vector | null {
+    const positions =
+        teamId === 1
+            ? sidesSwapped
+                ? side2SpawnPositions
+                : side1SpawnPositions
+            : sidesSwapped
+              ? side1SpawnPositions
+              : side2SpawnPositions;
+
+    if (positions.length === 0) return null;
+
+    const index = teamId === 1 ? team1SpawnIndex : team2SpawnIndex;
+    const pos = positions[index % positions.length];
+
+    // Increment index for next player
+    if (teamId === 1) {
+        team1SpawnIndex++;
+    } else {
+        team2SpawnIndex++;
+    }
+
+    return pos;
+}
+
+// Reset spawn indices (call at round start)
+function resetSpawnIndices(): void {
+    team1SpawnIndex = 0;
+    team2SpawnIndex = 0;
+    teleportedThisRound.clear();
+}
+
+// ============================================================================
+// CUSTOM SCOREBOARD SYSTEM
+// ============================================================================
+// Tracks: Damage, Kills, Deaths, Assists, Captures
+// ============================================================================
+
+interface PlayerStats {
+    damage: number;
+    kills: number;
+    deaths: number;
+    assists: number;
+    captures: number;
+}
+
+// Player stats tracking (by player ID)
+const playerStats: Map<number, PlayerStats> = new Map();
+
+// Initialize scoreboard column names and settings
+function initScoreboard(): void {
+    mod.SetScoreboardColumnNames(
+        mod.Message(mod.stringkeys.gunfight.scoreboard.damage),
+        mod.Message(mod.stringkeys.gunfight.scoreboard.kills),
+        mod.Message(mod.stringkeys.gunfight.scoreboard.deaths),
+        mod.Message(mod.stringkeys.gunfight.scoreboard.assists),
+        mod.Message(mod.stringkeys.gunfight.scoreboard.captures)
+    );
+    mod.SetScoreboardColumnWidths(1, 1, 1, 1, 1);
+    mod.SetScoreboardSorting(1, false); // Sort by kills (column 1), descending
+}
+
+// Get or create player stats
+function getPlayerStats(player: mod.Player): PlayerStats {
+    const playerId = mod.GetObjId(player);
+    let stats = playerStats.get(playerId);
+    if (!stats) {
+        stats = { damage: 0, kills: 0, deaths: 0, assists: 0, captures: 0 };
+        playerStats.set(playerId, stats);
+    }
+    return stats;
+}
+
+// Update scoreboard for a player
+function updateScoreboard(player: mod.Player): void {
+    // Check if this is a bot with persistent identity
+    const botIdentity = getBotIdentityByPlayerId(mod.GetObjId(player));
+    if (botIdentity) {
+        // Use persistent bot stats
+        try {
+            mod.SetScoreboardPlayerValues(
+                player,
+                botIdentity.stats.damage,
+                botIdentity.stats.kills,
+                botIdentity.stats.deaths,
+                botIdentity.stats.assists,
+                botIdentity.stats.captures
+            );
+        } catch {}
+        return;
+    }
+
+    // Regular player stats
+    const stats = getPlayerStats(player);
+    try {
+        mod.SetScoreboardPlayerValues(player, stats.damage, stats.kills, stats.deaths, stats.assists, stats.captures);
+    } catch {}
+}
+
+// ============================================================================
+// PERSISTENT BOT IDENTITY SYSTEM
+// ============================================================================
+// Bots are deleted/respawned each round but we want to preserve their stats
+// and keep them on the same team. Each bot has a unique identity.
+// ============================================================================
+
+interface BotIdentity {
+    id: number; // Unique persistent ID (1-8)
+    name: string; // Bot display name (randomized at match start)
+    teamId: 1 | 2; // Assigned team (never changes)
+    stats: PlayerStats; // Persistent stats
+    currentPlayerId: number | null; // Current player object ID (changes on respawn)
+    isActive: boolean; // Whether this bot is currently deployed
+}
+
+// Pool of all available bot names (randomly assigned at match start)
+const BOT_NAME_POOL: string[] = [
+    // Kept from the original pool (per request)
+    'Hope',
+    'DaPa',
+    'dfanz0r',
+    'BMO',
+    'Andy6170',
+    'Boxshards',
+    // Top-active Portal Hub Discord members (by message count in our export)
+    'Ariistuujj',
+    'Lemon64k',
+    'Phiality',
+    'mikedeluca_',
+    'gala_vs',
+    'nightfyre',
+    'Guzma',
+    'muj',
+    'TonisGaming',
+    'joslick76',
+    'ty_ger07',
+    'Cyphr',
+    'Renette',
+    'Markebarca',
+    'Bennen',
+    'TabbedScamper',
+    'F4rus',
+    'defined_edits',
+];
+
+// Define bot identities (up to 4 per team for 4v4 support)
+// Names are randomized at match start via randomizeBotNames()
+const BOT_IDENTITIES: BotIdentity[] = [
+    // Team 1 bots
+    {
+        id: 1,
+        name: BOT_NAME_POOL[0],
+        teamId: 1,
+        stats: { damage: 0, kills: 0, deaths: 0, assists: 0, captures: 0 },
+        currentPlayerId: null,
+        isActive: false,
+    },
+    {
+        id: 2,
+        name: BOT_NAME_POOL[1],
+        teamId: 1,
+        stats: { damage: 0, kills: 0, deaths: 0, assists: 0, captures: 0 },
+        currentPlayerId: null,
+        isActive: false,
+    },
+    {
+        id: 3,
+        name: BOT_NAME_POOL[2],
+        teamId: 1,
+        stats: { damage: 0, kills: 0, deaths: 0, assists: 0, captures: 0 },
+        currentPlayerId: null,
+        isActive: false,
+    },
+    {
+        id: 4,
+        name: BOT_NAME_POOL[3],
+        teamId: 1,
+        stats: { damage: 0, kills: 0, deaths: 0, assists: 0, captures: 0 },
+        currentPlayerId: null,
+        isActive: false,
+    },
+    // Team 2 bots
+    {
+        id: 5,
+        name: BOT_NAME_POOL[4],
+        teamId: 2,
+        stats: { damage: 0, kills: 0, deaths: 0, assists: 0, captures: 0 },
+        currentPlayerId: null,
+        isActive: false,
+    },
+    {
+        id: 6,
+        name: BOT_NAME_POOL[5],
+        teamId: 2,
+        stats: { damage: 0, kills: 0, deaths: 0, assists: 0, captures: 0 },
+        currentPlayerId: null,
+        isActive: false,
+    },
+    {
+        id: 7,
+        name: BOT_NAME_POOL[6],
+        teamId: 2,
+        stats: { damage: 0, kills: 0, deaths: 0, assists: 0, captures: 0 },
+        currentPlayerId: null,
+        isActive: false,
+    },
+    {
+        id: 8,
+        name: BOT_NAME_POOL[7],
+        teamId: 2,
+        stats: { damage: 0, kills: 0, deaths: 0, assists: 0, captures: 0 },
+        currentPlayerId: null,
+        isActive: false,
+    },
+];
+
+// Randomize bot names at match start (call once per match)
+function randomizeBotNames(): void {
+    // Shuffle the name pool
+    const shuffled = [...BOT_NAME_POOL];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    // Assign first 8 names to bot identities
+    for (let i = 0; i < BOT_IDENTITIES.length; i++) {
+        BOT_IDENTITIES[i].name = shuffled[i % shuffled.length];
+    }
+    adminDebugTool?.dynamicLog('Randomized bot names for new match');
+}
+
+// Get an available bot identity for a team and mark it as active immediately
+// (returns null if none available)
+function getAvailableBotIdentity(teamId: number): BotIdentity | null {
+    for (const identity of BOT_IDENTITIES) {
+        if (identity.teamId === teamId && !identity.isActive) {
+            // Mark as active immediately to prevent duplicate assignment
+            identity.isActive = true;
+            return identity;
+        }
+    }
+    return null;
+}
+
+// Get bot identity by current player ID
+function getBotIdentityByPlayerId(playerId: number): BotIdentity | null {
+    for (const identity of BOT_IDENTITIES) {
+        if (identity.currentPlayerId === playerId) {
+            return identity;
+        }
+    }
+    return null;
+}
+
+// Associate a newly spawned bot with its identity
+function associateBotWithIdentity(bot: mod.Player, identity: BotIdentity): void {
+    const playerId = mod.GetObjId(bot);
+    identity.currentPlayerId = playerId;
+    // isActive is already set by getAvailableBotIdentity when reserved
+    knownBotIds.add(playerId); // Track for sound filtering
+
+    // Update scoreboard with persistent stats
+    updateScoreboard(bot);
+
+    adminDebugTool?.dynamicLog(`Bot ${playerId} associated with identity ${identity.id}`);
+}
+
+// Mark a bot identity as inactive (when undeployed/killed)
+function deactivateBotIdentity(playerId: number): void {
+    const identity = getBotIdentityByPlayerId(playerId);
+    if (identity) {
+        identity.isActive = false;
+        identity.currentPlayerId = null;
+        adminDebugTool?.dynamicLog(`Bot identity ${identity.id} deactivated`);
+    }
+}
+
+// Reset bot identity active states at round start (they'll be re-associated when spawned)
+function resetBotIdentitiesForRound(): void {
+    for (const identity of BOT_IDENTITIES) {
+        identity.isActive = false;
+        identity.currentPlayerId = null;
+    }
+}
+
+// Get bot stats by player (uses persistent identity stats for bots)
+function getBotStats(player: mod.Player): PlayerStats | null {
+    const identity = getBotIdentityByPlayerId(mod.GetObjId(player));
+    return identity ? identity.stats : null;
+}
+
+// Offset distance for additional spawn points (meters)
+const SPAWN_OFFSET_DISTANCE = 1.0;
+
+// Create an offset position (perpendicular to flag direction)
+function createOffsetPosition(basePos: mod.Vector, offsetIndex: number): mod.Vector {
+    // Offset perpendicular to the spawn line (X-axis offset)
+    // offsetIndex 0 = no offset, 1 = +1m, 2 = -1m, 3 = +2m, etc.
+    const offsetDir = offsetIndex % 2 === 0 ? 1 : -1;
+    const offsetMag = Math.ceil((offsetIndex + 1) / 2) * SPAWN_OFFSET_DISTANCE * offsetDir;
+
+    return mod.CreateVector(
+        mod.XComponentOf(basePos) + offsetMag,
+        mod.YComponentOf(basePos),
+        mod.ZComponentOf(basePos)
+    );
+}
+
+// Initialize spawn positions from spatial objects
+// Generates up to 4 positions per side by offsetting base positions
+function initSpawnPositions(): void {
+    if (spawnPositionsInitialized) return;
+
+    try {
+        // Side 1 spawn points (spatial IDs 1 and 2)
+        const spawn1 = mod.GetSpatialObject(1);
+        const spawn2 = mod.GetSpatialObject(2);
+        const pos1 = mod.GetObjectPosition(spawn1);
+        const pos2 = mod.GetObjectPosition(spawn2);
+
+        // Generate 4 positions: base1, base2, offset1, offset2
+        side1SpawnPositions = [
+            pos1, // Position 1 (original)
+            pos2, // Position 2 (original)
+            createOffsetPosition(pos1, 1), // Position 3 (offset from pos1)
+            createOffsetPosition(pos2, 1), // Position 4 (offset from pos2)
+        ];
+
+        // Side 2 spawn points (spatial IDs 3 and 4)
+        const spawn3 = mod.GetSpatialObject(3);
+        const spawn4 = mod.GetSpatialObject(4);
+        const pos3 = mod.GetObjectPosition(spawn3);
+        const pos4 = mod.GetObjectPosition(spawn4);
+
+        // Generate 4 positions: base3, base4, offset3, offset4
+        side2SpawnPositions = [
+            pos3, // Position 1 (original)
+            pos4, // Position 2 (original)
+            createOffsetPosition(pos3, 1), // Position 3 (offset from pos3)
+            createOffsetPosition(pos4, 1), // Position 4 (offset from pos4)
+        ];
+
+        spawnPositionsInitialized = true;
+        adminDebugTool?.dynamicLog(`Spawn positions initialized: ${side1SpawnPositions.length} per side`);
+    } catch (e) {
+        // Spatial objects not found
+    }
+}
+
+// ============================================================================
+// CUSTOM BOT SYSTEM (Backfill)
+// ============================================================================
+// Bots fill all slots at round start. When a human player deploys,
+// a bot from their team is undeployed to make room.
+// ============================================================================
+
+// Count human players on a team
+function countHumansOnTeam(teamId: number): number {
+    const players = getPlayersOnTeam(teamId);
+    let count = 0;
+    for (const player of players) {
+        try {
+            if (!mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) {
+                count++;
+            }
+        } catch {}
+    }
+    return count;
+}
+
+// Count bots on a team
+function countBotsOnTeam(teamId: number): number {
+    const players = getPlayersOnTeam(teamId);
+    let count = 0;
+    for (const player of players) {
+        try {
+            if (mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) {
+                count++;
+            }
+        } catch {}
+    }
+    return count;
+}
+
+// Get bots on a team (also tracks bot IDs for sound filtering)
+function getBotsOnTeam(teamId: number): mod.Player[] {
+    const players = getPlayersOnTeam(teamId);
+    const bots: mod.Player[] = [];
+    for (const player of players) {
+        try {
+            if (mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) {
+                bots.push(player);
+                knownBotIds.add(mod.GetObjId(player)); // Track for sound filtering
+            }
+        } catch {}
+    }
+    return bots;
+}
+
+// Spawn a single custom bot at the given position for the given team
+function spawnCustomBot(teamId: number, position: mod.Vector): BotIdentity | null {
+    if (!ENABLE_CUSTOM_BOTS) return null;
+
+    // Get an available bot identity for this team
+    const identity = getAvailableBotIdentity(teamId);
+    if (!identity) {
+        adminDebugTool?.dynamicLog(`No available bot identity for team ${teamId}`);
+        return null;
+    }
+
+    try {
+        const team = mod.GetTeam(teamId);
+
+        // Create AI spawner at position (cast to Spawner for API compatibility)
+        const spawner = mod.SpawnObject(
+            mod.RuntimeSpawn_Common.AI_Spawner,
+            position,
+            mod.CreateVector(0, 0, 0)
+        ) as unknown as mod.Spawner;
+
+        // Configure spawner - don't auto-unspawn on death
+        mod.AISetUnspawnOnDead(spawner, false);
+        mod.SetUnspawnDelayInSeconds(spawner, BOT_UNSPAWN_DELAY);
+
+        // Spawn AI from spawner with name and team
+        mod.SpawnAIFromAISpawner(spawner, mod.SoldierClass.Engineer, mod.Message(identity.name + ' [BOT]'), team);
+
+        // Track spawner for cleanup (bots are found dynamically via getBotsOnTeam)
+        if (teamId === 1) {
+            team1Spawners.push(spawner);
+        } else {
+            team2Spawners.push(spawner);
+        }
+
+        adminDebugTool?.dynamicLog(`Spawned bot with identity ${identity.id} for team ${teamId}`);
+        return identity;
+    } catch (e) {
+        adminDebugTool?.dynamicLog(`Failed to spawn custom bot for team ${teamId}`);
+        return null;
+    }
+}
+
+// Track pending bot identities to associate after spawn
+let pendingBotIdentities: BotIdentity[] = [];
+
+// Spawn bots to fill all empty slots on both teams
+function spawnBackfillBots(): void {
+    if (!ENABLE_CUSTOM_BOTS) return;
+
+    // Make sure spawn positions are initialized
+    initSpawnPositions();
+
+    // Determine spawn positions based on side swap
+    const team1Positions = sidesSwapped ? side2SpawnPositions : side1SpawnPositions;
+    const team2Positions = sidesSwapped ? side1SpawnPositions : side2SpawnPositions;
+
+    // Count current humans on each team
+    const team1Humans = countHumansOnTeam(1);
+    const team2Humans = countHumansOnTeam(2);
+
+    // Dynamic team size scales to the human count (bots only fill the short side).
+    const targetSize = computeTargetTeamSize();
+
+    // Calculate how many bots needed per team
+    const team1BotsNeeded = Math.max(0, targetSize - team1Humans - countBotsOnTeam(1));
+    const team2BotsNeeded = Math.max(0, targetSize - team2Humans - countBotsOnTeam(2));
+
+    adminDebugTool?.dynamicLog(`Backfill: Team1 has ${team1Humans} humans, needs ${team1BotsNeeded} bots`);
+    adminDebugTool?.dynamicLog(`Backfill: Team2 has ${team2Humans} humans, needs ${team2BotsNeeded} bots`);
+
+    // Clear pending identities
+    pendingBotIdentities = [];
+
+    // Spawn bots for team 1 and track identities
+    for (let i = 0; i < team1BotsNeeded && i < team1Positions.length; i++) {
+        const identity = spawnCustomBot(1, team1Positions[i]);
+        if (identity) {
+            pendingBotIdentities.push(identity);
+        }
+    }
+
+    // Spawn bots for team 2 and track identities
+    for (let i = 0; i < team2BotsNeeded && i < team2Positions.length; i++) {
+        const identity = spawnCustomBot(2, team2Positions[i]);
+        if (identity) {
+            pendingBotIdentities.push(identity);
+        }
+    }
+
+    // Associate bots with identities after a short delay (bots spawn asynchronously)
+    if (pendingBotIdentities.length > 0) {
+        Timers.setTimeout(() => {
+            associatePendingBots();
+        }, 500);
+    }
+
+    adminDebugTool?.dynamicLog(`Backfill: spawned ${pendingBotIdentities.length} bots`);
+}
+
+// Associate pending bot identities with spawned bots
+function associatePendingBots(): void {
+    for (const identity of pendingBotIdentities) {
+        const bots = getBotsOnTeam(identity.teamId);
+        for (const bot of bots) {
+            const botId = mod.GetObjId(bot);
+            // Check if this bot is already associated with an identity
+            if (!getBotIdentityByPlayerId(botId)) {
+                associateBotWithIdentity(bot, identity);
+                break; // Found a bot for this identity
+            }
+        }
+    }
+    pendingBotIdentities = [];
+}
+
+// Undeploy one bot from a team to make room for a human
+function undeployBotForTeam(teamId: number): void {
+    if (!ENABLE_CUSTOM_BOTS) return;
+
+    // Find a bot on this team to undeploy
+    const bots = getBotsOnTeam(teamId);
+
+    if (bots.length === 0) {
+        adminDebugTool?.dynamicLog(`No bots to undeploy for team ${teamId}`);
+        return;
+    }
+
+    // Undeploy the first bot found
+    const botToRemove = bots[0];
+    const botId = mod.GetObjId(botToRemove);
+
+    try {
+        mod.UndeployPlayer(botToRemove);
+        adminDebugTool?.dynamicLog(`Undeployed bot ${botId} for team ${teamId}`);
+    } catch {
+        adminDebugTool?.dynamicLog(`Failed to undeploy bot ${botId}`);
+    }
+}
+
+// ============================================================================
+// DYNAMIC TEAM SIZING + RULE-1 RECONCILE  (see TEAM-SORTING-SPEC.md)
+// ============================================================================
+// Priority: (1) a human on EACH team "at all cost"; (2) friends stay together
+// -- the engine already groups a party onto one team, so we only intervene for
+// rule 1; (3) balanced team SIZES with bots filling the short side. Teams scale
+// to the human count: 2 humans = 1v1, 3 = 2v2 (+1 bot), up to 4v4.
+// ============================================================================
+
+// Seats per team this round = the larger human count, clamped to [1, PLAYERS_PER_TEAM].
+// DEBUG: force a full lobby so a solo tester gets a real match (bot teammates + enemies).
+function computeTargetTeamSize(): number {
+    if (DEBUG_MODE) return DEBUG_TEAM_SIZE;
+    const h1 = countHumansOnTeam(1);
+    const h2 = countHumansOnTeam(2);
+    return Math.max(1, Math.min(PLAYERS_PER_TEAM, Math.max(h1, h2)));
+}
+
+// DEBUG: log what the team-sorting WOULD decide for the spec's worked cases, so the human-
+// distribution logic can be sanity-checked solo (real multi-human execution still needs a 2nd client).
+function debugSimulateTeamSorting(): void {
+    if (!DEBUG_MODE) return;
+    const size = (h1: number, h2: number) => Math.max(1, Math.min(PLAYERS_PER_TEAM, Math.max(h1, h2)));
+    // Each case = the human split the engine+rule-1 would settle on, and the resulting seats/bots.
+    const cases = [
+        { label: '2friends', h1: 1, h2: 1 }, // 2 friends -> rule1 splits -> 1v1
+        { label: '3friends', h1: 2, h2: 1 }, // 3 friends -> split 1 -> 2v2 (+1 bot)
+        { label: '3friends+random', h1: 3, h2: 1 }, // random covers rule1 -> 3v3 (+2 bots)
+        { label: '4v4', h1: 4, h2: 4 },
+    ];
+    for (const c of cases) {
+        const ts = size(c.h1, c.h2);
+        Tlm.event('team.sim', {
+            case: c.label,
+            humans: `${c.h1}v${c.h2}`,
+            seats: ts,
+            botsT1: Math.max(0, ts - c.h1),
+            botsT2: Math.max(0, ts - c.h2),
+        });
+    }
+}
+
+// Move exactly one human from -> to (to satisfy rule 1). Frees a bot slot on the
+// target first, and prefers a NON squad-leader so a party keeps its leader together.
+function moveOneHumanToTeam(fromTeamId: number, toTeamId: number): boolean {
+    const humans = getPlayersOnTeam(fromTeamId).filter((p) => {
+        try {
+            return !mod.GetSoldierState(p, mod.SoldierStateBool.IsAISoldier);
+        } catch {
+            return false;
+        }
+    });
+    if (humans.length <= 1) return false; // never strip the source team of its last human
+
+    // Move someone from the SMALLEST squad group (a solo / non-party player first) so the
+    // largest party stays whole (rule 2); tie-break toward a non-squad-leader. GetSquad
+    // works since SDK 1.2.1.0; degrades to "last human" if squad data is unavailable.
+    const squads: (mod.Squad | null)[] = humans.map((p) => {
+        try {
+            return mod.GetSquad(p);
+        } catch {
+            return null;
+        }
+    });
+    const groupSizeFor = (i: number): number => {
+        const s = squads[i];
+        if (!s) return 1;
+        let n = 0;
+        for (const other of squads) {
+            try {
+                if (other && mod.Equals(s, other)) n++;
+            } catch {}
+        }
+        return n;
+    };
+    let pick = humans[humans.length - 1];
+    let bestScore = Infinity;
+    for (let i = 0; i < humans.length; i++) {
+        let leader = 0;
+        try {
+            leader = mod.IsSquadLeader(humans[i]) ? 1 : 0;
+        } catch {}
+        const score = groupSizeFor(i) * 10 + leader; // smallest group first, non-leader first
+        if (score < bestScore) {
+            bestScore = score;
+            pick = humans[i];
+        }
+    }
+
+    try {
+        undeployBotForTeam(toTeamId); // make room on the target team (SetTeam needs a free slot)
+        mod.UndeployPlayer(pick); // SetTeam requires an undeployed target
+        mod.SetTeam(pick, mod.GetTeam(toTeamId));
+        Tlm.event('team.moveHuman', { player: mod.GetObjId(pick), from: fromTeamId, to: toTeamId });
+        return true;
+    } catch {
+        Tlm.event('team.moveHuman.fail', { from: fromTeamId, to: toTeamId });
+        return false;
+    }
+}
+
+// Ensure rule 1 (a human on each team) with the fewest possible human moves.
+// The engine keeps parties together; we only split when ALL humans are on one team.
+// Bot sizing is done by spawnBackfillBots (computeTargetTeamSize).
+function reconcileTeams(): void {
+    if (!ENABLE_CUSTOM_BOTS) return;
+
+    let h1 = countHumansOnTeam(1);
+    let h2 = countHumansOnTeam(2);
+
+    // Rule 1: 2+ humans present but a team has none -> move a single human over.
+    if (h1 + h2 >= 2 && (h1 === 0 || h2 === 0)) {
+        const from = h1 > 0 ? 1 : 2;
+        const to = from === 1 ? 2 : 1;
+        if (moveOneHumanToTeam(from, to)) {
+            h1 = countHumansOnTeam(1);
+            h2 = countHumansOnTeam(2);
+        }
+    }
+
+    Tlm.event('team.reconcile', {
+        h1,
+        h2,
+        targetSize: Math.max(1, Math.min(PLAYERS_PER_TEAM, Math.max(h1, h2))),
+    });
+}
+
+// Find closest enemy player to a bot
+function findClosestEnemy(bot: mod.Player): mod.Player | null {
+    try {
+        const botTeam = mod.GetTeam(bot);
+        const botTeamId = mod.GetObjId(botTeam);
+        const botPos = mod.GetSoldierState(bot, mod.SoldierStateVector.GetPosition);
+
+        let closestEnemy: mod.Player | null = null;
+        let closestDistance = Infinity;
+
+        // Get all players from both teams
+        const allPlayers = [...getAlivePlayersOnTeam(1), ...getAlivePlayersOnTeam(2)];
+
+        for (const player of allPlayers) {
+            try {
+                // Skip if same team
+                const playerTeam = mod.GetTeam(player);
+                if (mod.GetObjId(playerTeam) === botTeamId) continue;
+
+                // Skip if same player
+                if (mod.GetObjId(player) === mod.GetObjId(bot)) continue;
+
+                // Get distance
+                const playerPos = mod.GetSoldierState(player, mod.SoldierStateVector.GetPosition);
+                const distance = mod.DistanceBetween(botPos, playerPos);
+
+                if (distance < closestDistance) {
+                    closestDistance = distance;
+                    closestEnemy = player;
+                }
+            } catch {}
+        }
+
+        return closestEnemy;
+    } catch {
+        return null;
+    }
+}
+
+// Check if any enemy is on the flag capture zone
+function isEnemyOnFlag(botTeamId: number): boolean {
+    if (!botFlagActive || !flagCaptureUI) return false;
+
+    const flagPos = flagCaptureUI.getFlagPosition();
+    if (!flagPos) return false;
+
+    const enemyTeamId = botTeamId === 1 ? 2 : 1;
+    const enemyPlayers = getAlivePlayersOnTeam(enemyTeamId);
+
+    for (const enemy of enemyPlayers) {
+        try {
+            const enemyPos = mod.GetSoldierState(enemy, mod.SoldierStateVector.GetPosition);
+            const distance = mod.DistanceBetween(enemyPos, flagPos);
+            if (distance <= 3) {
+                // FLAG_CAPTURE_RADIUS
+                return true;
+            }
+        } catch {}
+    }
+
+    return false;
+}
+
+// Update all bot targets based on AI behavior rules
+// Now uses the realistic bot brain system with probabilistic detection
+// Flag behavior is fully integrated into the brain - no more blind rushing
+function updateBotTargets(): void {
+    _botTargetUpdates++;
+
+    // Log every 10 updates (~5 seconds at 500ms interval)
+    if (_botTargetUpdates % 10 === 0) {
+        logMain('BOT TARGETING STATS', { totalUpdates: _botTargetUpdates, botFlagActive, botInitialTargetPhase });
+    }
+
+    // During initial 5 second phase, use original targeting (guaranteed initial target)
+    if (botInitialTargetPhase) {
+        return;
+    }
+
+    const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+
+    for (const player of allPlayers) {
+        try {
+            if (!mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) continue;
+            if (!mod.GetSoldierState(player, mod.SoldierStateBool.IsAlive)) continue;
+
+            const botTeam = mod.GetTeam(player);
+            const team1 = mod.GetTeam(1);
+            const botTeamId = mod.GetObjId(botTeam) === mod.GetObjId(team1) ? 1 : 2;
+
+            // Use the brain system for ALL behavior including flag
+            // Brain handles: probabilistic detection, memory, patrol, search, AND flag tactics
+            const brain = getBotBrain(player);
+
+            // Configure brain with context getters
+            brain.setFlagPosGetter(() => flagCaptureUI?.getFlagPosition() ?? null);
+            brain.setSpawnPositionsGetter(() => {
+                return botTeamId === 1
+                    ? sidesSwapped
+                        ? side2SpawnPositions
+                        : side1SpawnPositions
+                    : sidesSwapped
+                      ? side1SpawnPositions
+                      : side2SpawnPositions;
+            });
+
+            // Set flag urgency getter - urgency increases as overtime progresses
+            brain.setFlagUrgencyGetter(() => {
+                if (!botFlagActive || botFlagSpawnTime === 0) return 0;
+                // Calculate time since flag spawned
+                const overtimeElapsed = Date.now() - botFlagSpawnTime;
+                const overtimeMax = 15000; // 15 second overtime
+                // Urgency ramps from 0.3 to 1.0 as overtime progresses
+                const urgency = 0.3 + (overtimeElapsed / overtimeMax) * 0.7;
+                return Math.min(1.0, urgency);
+            });
+
+            // Tick the brain - this runs ALL sensors and selects behavior
+            brain.tick();
+        } catch {}
+    }
+}
+
+// Start bot targeting loop
+function startBotTargeting(): void {
+    if (!ENABLE_CUSTOM_BOTS) return;
+    if (botTargetingInterval !== null) return;
+
+    botTargetingInterval = Timers.setInterval(() => {
+        updateBotTargets();
+    }, BOT_TARGET_UPDATE_MS);
+
+    // Fast LOS loop: exactly one raycast per tick (round-robin across bots) so a bot can
+    // only "see" an enemy it has a clear line to. ~10 Hz keeps each engaged bot's LOS fresh
+    // (~human reaction latency) without over-leaking casts.
+    if (losInterval === null) {
+        let losTick = 0;
+        losInterval = Timers.setInterval(() => {
+            try {
+                const bots = [...getBotsOnTeam(1), ...getBotsOnTeam(2)];
+                updateLos(bots, 60); // 60m = SENSOR_CONFIG.SIGHT_RANGE
+                if (++losTick % 50 === 0) {
+                    Tlm.sample('los', { casts: getLosCastCount(), bots: bots.length });
+                }
+            } catch {}
+        }, 100);
+    }
+
+    adminDebugTool?.dynamicLog('Bot targeting started');
+}
+
+// Stop bot targeting loop
+function stopBotTargeting(): void {
+    if (botTargetingInterval !== null) {
+        Timers.clearInterval(botTargetingInterval);
+        botTargetingInterval = null;
+    }
+    if (losInterval !== null) {
+        Timers.clearInterval(losInterval);
+        losInterval = null;
+    }
+    clearLos();
+}
+
+// Route raycast LOS-probe results to the bot LOS manager (los.ts).
+Events.OnRayCastHit.subscribe((bot: mod.Player, point: mod.Vector, _normal: mod.Vector) => {
+    onRayHit(bot, point);
+});
+Events.OnRayCastMissed.subscribe((bot: mod.Player) => {
+    onRayMiss(bot);
+});
+
+// ============================================================================
+// MATCH END CLEANUP
+// ============================================================================
+// Called before EndGameMode to ensure all UI/timers are stopped for fresh start
+// ============================================================================
+function cleanupForMatchEnd(): void {
+    // Mark match as ending to prevent any new rounds
+    matchEnding = true;
+
+    // Update all player scoreboards with final stats before cleanup
+    // This ensures stats persist to the end-of-match scoreboard
+    const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+    for (const player of allPlayers) {
+        updateScoreboard(player);
+    }
+
+    // Set spawn mode to auto spawn before ending
+    mod.SetSpawnMode(mod.SpawnModes.AutoSpawn);
+
+    // Stop all intervals
+    stopBotTargeting();
+    if (telemetryInterval !== undefined) {
+        Timers.clearInterval(telemetryInterval);
+        telemetryInterval = undefined;
+    }
+
+    // Destroy countdown UI
+    if (countdownUI) {
+        countdownUI.destroy();
+        countdownUI = undefined;
+    }
+
+    // Destroy flag capture UI
+    if (flagCaptureUI) {
+        flagCaptureUI.destroy();
+        flagCaptureUI = undefined;
+    }
+
+    // Hide all active UIs
+    hideEliminationEffect();
+    hideAllRoundResults();
+
+    // Reset state
+    roundNumber = 0;
+    roundStarted = false;
+    resettingRound = false;
+    roundEnding = false;
+    currentLoadout = undefined;
+    lastKiller = null;
+    botInitialTargetPhase = false;
+    botFlagActive = false;
+    botFlagSpawnTime = 0;
+    botsInterestedInFlag.clear();
+    knownBotIds.clear();
+    resetEliminationTracking();
+    resetScores();
+    clearRejectedPlayers();
+    clearAllBotBrains(); // Clear all bot AI brains
+
+    adminDebugTool?.dynamicLog('Match cleanup complete');
+}
+
+// Deploy EVERY player before ending the match. If a player is left undeployed
+// (spectating) when victory is called, the next map inherits that spectator state
+// and the player gets stuck spectating their nearest squad. So: stop the match,
+// force everyone onto the battlefield, wait a beat for it to apply, THEN end.
+function endMatchDeployed(winner: mod.Team): void {
+    cleanupForMatchEnd(); // stops timers/UI, sets AutoSpawn, roundStarted=false, countdownUI=undefined
+
+    try {
+        mod.SetSpawnMode(mod.SpawnModes.AutoSpawn);
+    } catch {}
+
+    // Force any dead/spectating player back onto the battlefield before victory.
+    const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+    for (const p of allPlayers) {
+        try {
+            mod.EnablePlayerDeploy(p, true);
+            if (!mod.GetSoldierState(p, mod.SoldierStateBool.IsAlive)) {
+                mod.DeployPlayer(p);
+            }
+        } catch {}
+    }
+    try {
+        mod.DeployAllPlayers(); // catch-all for anyone still on the deploy screen
+    } catch {}
+    Tlm.event('match.deployAll', { players: allPlayers.length });
+
+    // Give the deploys a beat to actually take effect, THEN end the game mode.
+    Timers.setTimeout(() => {
+        Tlm.event('match.end');
+        mod.EndGameMode(winner);
+    }, 1200);
+}
+
+// Set all bots to aggressive battlefield behavior
+// Phase 1: Target nearest enemy immediately (guaranteed initial awareness)
+// Phase 2: After 5 seconds, brain system takes over with realistic detection
+function activateBots(): void {
+    if (!ENABLE_CUSTOM_BOTS) return;
+
+    const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+
+    // Reset state
+    botInitialTargetPhase = true;
+    botFlagActive = false;
+    botFlagSpawnTime = 0;
+    botsInterestedInFlag.clear();
+
+    // Get push targets (toward center/flag area)
+    const flagPos = flagCaptureUI?.getFlagPosition();
+    const team1EnemySpawns = sidesSwapped ? side1SpawnPositions : side2SpawnPositions;
+    const team2EnemySpawns = sidesSwapped ? side2SpawnPositions : side1SpawnPositions;
+
+    for (const player of allPlayers) {
+        try {
+            if (!mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) continue;
+            if (!mod.GetSoldierState(player, mod.SoldierStateBool.IsAlive)) continue;
+
+            // Initialize/reset brain for this bot
+            const brain = getBotBrain(player);
+            brain.reset();
+
+            // Enable shooting and targeting
+            mod.AIEnableShooting(player, true);
+            mod.AIEnableTargeting(player, true);
+
+            // Determine bot's team
+            const botTeam = mod.GetTeam(player);
+            const team1 = mod.GetTeam(1);
+            const isTeam1 = mod.GetObjId(botTeam) === mod.GetObjId(team1);
+
+            // Set push target toward flag or enemy spawn
+            // Push toward flag (center) with some randomization toward enemy side
+            const botPos = mod.GetSoldierState(player, mod.SoldierStateVector.GetPosition);
+            let pushTarget: mod.Vector;
+
+            if (flagPos) {
+                // Push toward flag with slight offset toward enemy side
+                const enemySpawns = isTeam1 ? team1EnemySpawns : team2EnemySpawns;
+                if (enemySpawns.length > 0) {
+                    const enemySpawn = enemySpawns[Math.floor(Math.random() * enemySpawns.length)];
+                    // Target is 70% toward flag, 30% toward enemy spawn
+                    pushTarget = mod.CreateVector(
+                        mod.XComponentOf(flagPos) * 0.7 + mod.XComponentOf(enemySpawn) * 0.3,
+                        mod.YComponentOf(flagPos),
+                        mod.ZComponentOf(flagPos) * 0.7 + mod.ZComponentOf(enemySpawn) * 0.3
+                    );
+                } else {
+                    pushTarget = flagPos;
+                }
+            } else {
+                // No flag - push toward enemy spawn
+                const enemySpawns = isTeam1 ? team1EnemySpawns : team2EnemySpawns;
+                if (enemySpawns.length > 0) {
+                    pushTarget = enemySpawns[Math.floor(Math.random() * enemySpawns.length)];
+                } else {
+                    // Fallback - push forward from current position
+                    pushTarget = mod.CreateVector(
+                        mod.XComponentOf(botPos),
+                        mod.YComponentOf(botPos),
+                        mod.ZComponentOf(botPos) + (isTeam1 ? 20 : -20)
+                    );
+                }
+            }
+
+            // Set push target and sprint flag in brain memory
+            brain.setPushTarget(pushTarget);
+
+            // Also set initial target for shooting if they see enemies
+            const target = findClosestEnemy(player);
+            if (target) {
+                mod.AISetTarget(player, target);
+            }
+
+            // Start with sprint speed and movement toward push target
+            mod.AISetMoveSpeed(player, mod.MoveSpeed.Sprint);
+            mod.AIValidatedMoveToBehavior(player, pushTarget);
+        } catch {}
+    }
+
+    // Start targeting loop
+    startBotTargeting();
+
+    adminDebugTool?.dynamicLog('Bots activated with push targets');
+
+    // After 5 seconds, clear push targets if not already cleared (enemies found)
+    Timers.setTimeout(() => {
+        botInitialTargetPhase = false;
+
+        // Let bot brains take over fully
+        const currentPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+        for (const player of currentPlayers) {
+            try {
+                if (!mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) continue;
+                if (!mod.GetSoldierState(player, mod.SoldierStateBool.IsAlive)) continue;
+
+                // Clear push target if still active - transition to normal behavior
+                const brain = getBotBrain(player);
+                brain.clearPushTarget();
+
+                // Stop sprinting, return to run speed
+                mod.AISetMoveSpeed(player, mod.MoveSpeed.Run);
+
+                // Apply battlefield behavior for continued engagement
+                mod.AIBattlefieldBehavior(player);
+
+                // Set target AFTER behavior (to target humans too)
+                const target = findClosestEnemy(player);
+                if (target) {
+                    mod.AISetTarget(player, target);
+                    mod.AIEnableShooting(player, true);
+                    mod.AIEnableTargeting(player, true);
+                }
+            } catch {}
+        }
+
+        adminDebugTool?.dynamicLog('Bots transitioned to brain-based realistic targeting');
+    }, BOT_INITIAL_TARGET_DURATION_MS);
+}
+
+// Called when overtime flag spawns - notify all bot brains
+// The brain system now handles flag decisions dynamically (no more random 20% chance)
+function notifyBotsOfFlagSpawn(): void {
+    if (!ENABLE_CUSTOM_BOTS) return;
+
+    botFlagActive = true;
+    botFlagSpawnTime = Date.now(); // Track when flag spawned for urgency calculation
+
+    const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+    let notifiedCount = 0;
+
+    for (const player of allPlayers) {
+        try {
+            if (!mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) continue;
+            if (!mod.GetSoldierState(player, mod.SoldierStateBool.IsAlive)) continue;
+
+            // Notify brain that flag is active
+            const brain = getBotBrain(player);
+            brain.notifyFlagSpawned();
+            notifiedCount++;
+        } catch {}
+    }
+
+    adminDebugTool?.dynamicLog(`Flag spawned - notified ${notifiedCount} bot brains`);
+}
+
+// Set all bots to idle behavior (for freeze period)
+function freezeBots(): void {
+    if (!ENABLE_CUSTOM_BOTS) return;
+
+    const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+
+    for (const player of allPlayers) {
+        try {
+            if (!mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) continue;
+            if (mod.GetSoldierState(player, mod.SoldierStateBool.IsAlive)) {
+                mod.AIIdleBehavior(player);
+                mod.AIEnableShooting(player, false);
+                mod.AIEnableTargeting(player, false);
+                mod.AISetStance(player, mod.Stance.Stand);
+            }
+        } catch {}
+    }
+
+    stopBotTargeting();
+    adminDebugTool?.dynamicLog('Bots frozen with idle behavior');
+}
+
+// Clean up all custom bots and spawners
+function cleanupCustomBots(): void {
+    stopBotTargeting();
+
+    // Unspawn all spawners
+    for (const spawner of [...team1Spawners, ...team2Spawners]) {
+        try {
+            mod.UnspawnObject(spawner);
+        } catch {}
+    }
+
+    team1Spawners = [];
+    team2Spawners = [];
+    knownBotIds.clear();
+
+    adminDebugTool?.dynamicLog('Custom bots cleaned up');
+}
+
+// Audio volume config
+export const AUDIO_CONFIG = {
+    SFX_VOLUME: 0.5, // 50% volume for sound effects
+    VO_VOLUME: 1.0, // 100% volume for voice overs
+};
+
+// Sound effects
+const SOUNDS = {
+    ROUND_START: mod.RuntimeSpawn_Common.SFX_UI_Gauntlet_Vendetta_NewHVT_OneShot2D,
+    ROUND_LOSS: mod.RuntimeSpawn_Common.SFX_UI_Gauntlet_Rodeo_TankAcquired_OneShot2D,
+    ROUND_WIN: mod.RuntimeSpawn_Common.SFX_UI_Gauntlet_EOM_Qualified_OneShot2D,
+    PLAYER_LEAVE: mod.RuntimeSpawn_Common.SFX_UI_Gamemode_Shared_CaptureObjectives_CapturingThumpFriendly_OneShot2D,
+    PLAYER_JOIN: mod.RuntimeSpawn_Common.SFX_GameModes_BR_UXUI_CircleShrink_Start_OneShot2D,
+    FRIENDLY_DEATH: mod.RuntimeSpawn_Common.SFX_UI_Gamemode_Shared_OutOfBounds_Countdown_OneShot2D,
+    ENEMY_DEATH: mod.RuntimeSpawn_Common.SFX_Soldier_Events_SoldierDown_DeathStingerSkipRevive_OneShot2D,
+};
+
+// Helper to play 2D sound for a player (exported for use in other modules)
+export function playSound(player: mod.Player, sound: mod.RuntimeSpawn_Common, duration: number = 5000): void {
+    try {
+        const sfx = mod.SpawnObject(sound, mod.CreateVector(0, 0, 0), mod.CreateVector(0, 0, 0));
+        mod.PlaySound(sfx, AUDIO_CONFIG.SFX_VOLUME, player);
+        Timers.setTimeout(() => {
+            try {
+                mod.StopSound(sfx);
+                mod.UnspawnObject(sfx);
+            } catch {}
+        }, duration);
+    } catch {}
+}
+
+// Voice over system - spawn VO module per call at player position
+export function playVO(event: mod.VoiceOverEvents2D, target?: mod.Player | mod.Team): void {
+    try {
+        // 2D VO is positionless (same as playSound) — spawn the module at origin.
+        // The old code read GetSoldierState() off the target to place it, but its
+        // "is this a Player?" check was always true for opaque handles, so when the
+        // target was a Team it called GetSoldierState(team, ...) -> NoMatchingOverload,
+        // which killed every round-progress VO (16x in the captured PortalLog).
+        const voModule = mod.SpawnObject(
+            mod.RuntimeSpawn_Common.SFX_VOModule_OneShot2D,
+            mod.CreateVector(0, 0, 0),
+            mod.CreateVector(0, 0, 0)
+        ) as mod.VO;
+
+        if (target) {
+            // Native PlayVO accepts Player OR Team; TS can't pick from the union, so cast.
+            mod.PlayVO(voModule, event, mod.VoiceOverFlags.Alpha, target as mod.Player);
+        } else {
+            mod.PlayVO(voModule, event, mod.VoiceOverFlags.Alpha);
+        }
+
+        // Free the VO module (the old code leaked one spawned object per call, per match).
+        Timers.setTimeout(() => {
+            try {
+                mod.UnspawnObject(voModule);
+            } catch {}
+        }, 5000);
+    } catch {}
+}
+
+// Play round win/loss VOs based on round progress (early/mid/late)
+function playRoundProgressVO(winningTeamId: number): void {
+    const winningTeam = mod.GetTeam(winningTeamId);
+    const losingTeamId = winningTeamId === 1 ? 2 : 1;
+    const losingTeam = mod.GetTeam(losingTeamId);
+
+    // Determine progress stage based on round number
+    // Early: rounds 1-4, Mid: rounds 5-8, Late: rounds 9-11
+    let winningVO: mod.VoiceOverEvents2D;
+    let losingVO: mod.VoiceOverEvents2D;
+
+    if (roundNumber <= 4) {
+        // Early game
+        winningVO = mod.VoiceOverEvents2D.ProgressEarlyWinning;
+        losingVO = mod.VoiceOverEvents2D.ProgressEarlyLosing;
+    } else if (roundNumber <= 8) {
+        // Mid game
+        winningVO = mod.VoiceOverEvents2D.ProgressMidWinning;
+        losingVO = mod.VoiceOverEvents2D.ProgressMidLosing;
+    } else {
+        // Late game
+        winningVO = mod.VoiceOverEvents2D.ProgressLateWinning;
+        losingVO = mod.VoiceOverEvents2D.ProgressLateLosing;
+    }
+
+    playVO(winningVO, winningTeam);
+    playVO(losingVO, losingTeam);
+}
+
+export function getCurrentRoundNumber(): number {
+    return roundNumber;
+}
+
+// ============================================================================
+// LOADOUT SYSTEM
+// ============================================================================
+// Custom loadouts (with attachments) are more common than stock weapons
+// 50/50 chance for primary-only or secondary-only loadouts
+// ============================================================================
+
+// Attachment aliases for compression
+const A = mod.WeaponAttachments;
+const W = mod.Weapons;
+const G = mod.Gadgets;
+const SK = mod.stringkeys.gunfight.loadout;
+
+// Build attachment slot lookup map from enum keys
+const attachmentSlotMap = new Map<mod.WeaponAttachments, string>();
+for (const key of Object.keys(mod.WeaponAttachments)) {
+    // Skip numeric keys (reverse mapping)
+    if (!isNaN(Number(key))) continue;
+    const value = (mod.WeaponAttachments as unknown as Record<string, number>)[key];
+    if (key.startsWith('Scope_Piggyback_')) attachmentSlotMap.set(value, 'piggyback');
+    else if (key.startsWith('Scope_')) attachmentSlotMap.set(value, 'scope');
+    else if (key.startsWith('Muzzle_')) attachmentSlotMap.set(value, 'muzzle');
+    else if (key.startsWith('Barrel_')) attachmentSlotMap.set(value, 'barrel');
+    else if (key.startsWith('Magazine_')) attachmentSlotMap.set(value, 'magazine');
+    else if (key.startsWith('Ammo_')) attachmentSlotMap.set(value, 'ammo');
+    else if (key.startsWith('Bottom_')) attachmentSlotMap.set(value, 'bottom');
+    else if (key.startsWith('Left_')) attachmentSlotMap.set(value, 'left');
+    else if (key.startsWith('Right_')) attachmentSlotMap.set(value, 'right');
+    else if (key.startsWith('Top_')) attachmentSlotMap.set(value, 'top');
+    else if (key.startsWith('Ergonomic_')) attachmentSlotMap.set(value, 'ergonomic');
+}
+
+// Attachment slot detection - determines which slot an attachment belongs to
+function getAttachmentSlot(attachment: mod.WeaponAttachments): string {
+    return attachmentSlotMap.get(attachment) || 'unknown';
+}
+
+// Fill missing attachment slots with stock defaults
+export function getCompleteAttachments(
+    weapon: mod.Weapons,
+    customAttachments: mod.WeaponAttachments[]
+): mod.WeaponAttachments[] {
+    // Get stock attachments for this weapon
+    const stockAttachments = getStockAttachments(weapon);
+
+    // Determine which slots are already filled by custom attachments
+    const filledSlots = new Set<string>();
+    for (const att of customAttachments) {
+        filledSlots.add(getAttachmentSlot(att));
+    }
+
+    // Start with custom attachments
+    const result = [...customAttachments];
+
+    // Add stock attachments for any missing slots
+    for (const stockAtt of stockAttachments) {
+        const slot = getAttachmentSlot(stockAtt);
+        if (!filledSlots.has(slot)) {
+            result.push(stockAtt);
+            filledSlots.add(slot);
+        }
+    }
+
+    return result;
+}
+
+// Stock attachment helper functions - using explicit conditionals for reliable matching
+export function getStockAttachments(w: mod.Weapons): mod.WeaponAttachments[] {
+    const attachments: mod.WeaponAttachments[] = [];
+
+    // Add scope (most weapons use iron sights, UMG-40 uses CQB sights)
+    if (w === W.SMG_UMG_40) attachments.push(A.Scope_CQB_Sights);
+    else attachments.push(A.Scope_Iron_Sights);
+
+    // Add ammo type (shotguns use buckshot, others use FMJ)
+    const isShotgun =
+        w === W.Shotgun_M87A1 || w === W.Shotgun_M1014 || w === W.Shotgun__185KS_K || w === W.Shotgun_DB_12;
+    attachments.push(isShotgun ? A.Ammo_Buckshot : A.Ammo_FMJ);
+
+    // Add stock barrel (explicit conditionals for reliable enum matching)
+    const barrel = getStockBarrel(w);
+    if (barrel !== null) attachments.push(barrel);
+
+    // Add stock magazine (explicit conditionals for reliable enum matching)
+    const magazine = getStockMagazine(w);
+    if (magazine !== null) attachments.push(magazine);
+
+    // Special underbarrel for some weapons
+    if (w === W.Sidearm_M45A1) attachments.push(A.Bottom_Laser_Light_Combo_Green);
+    if (w === W.DMR_LMR27) attachments.push(A.Bottom_Factory_Angled);
+    if (w === W.SMG_SL9) attachments.push(A.Bottom_Factory_Angled);
+
+    return attachments;
+}
+
+function getStockBarrel(w: mod.Weapons): mod.WeaponAttachments | null {
+    // Assault Rifles
+    if (w === W.AssaultRifle_M433) return A.Barrel_145_Standard;
+    if (w === W.AssaultRifle_B36A4) return A.Barrel_480mm_Factory;
+    if (w === W.AssaultRifle_SOR_556_Mk2) return A.Barrel_145_Factory;
+    if (w === W.AssaultRifle_AK4D) return A.Barrel_450mm_Factory;
+    if (w === W.AssaultRifle_TR_7) return A.Barrel_17_Factory;
+    if (w === W.AssaultRifle_KORD_6P67) return A.Barrel_415mm_Factory;
+    if (w === W.AssaultRifle_NVO_228E) return A.Barrel_409mm_Factory;
+    if (w === W.AssaultRifle_L85A3) return A.Barrel_518mm_Factory;
+    // Shotguns
+    if (w === W.Shotgun_M87A1) return A.Barrel_20_Factory;
+    if (w === W.Shotgun_M1014) return A.Barrel_185_Factory;
+    if (w === W.Shotgun__185KS_K) return A.Barrel_430mm_Factory;
+    if (w === W.Shotgun_DB_12) return A.Barrel_189_Factory;
+    // Pistols
+    if (w === W.Sidearm_P18) return A.Barrel_39_Factory;
+    if (w === W.Sidearm_ES_57) return A.Barrel_122mm_Factory;
+    if (w === W.Sidearm_M45A1) return A.Barrel_5_Factory;
+    if (w === W.Sidearm_M44) return A.Barrel_675_Factory;
+    if (w === W.Sidearm_GGH_22) return A.Barrel_114mm_Factory;
+    if (w === W.Sidearm_M357_Trait) return A.Barrel_5_Factory;
+    // Snipers
+    if (w === W.Sniper_M2010_ESR) return A.Barrel_24_Full;
+    if (w === W.Sniper_SV_98) return A.Barrel_650mm_Factory;
+    if (w === W.Sniper_PSR) return A.Barrel_26_Factory;
+    if (w === W.Sniper_Mini_Scout) return A.Barrel_16_Factory;
+    // DMRs
+    if (w === W.DMR_M39_EMR) return A.Barrel_22_Factory;
+    if (w === W.DMR_LMR27) return A.Barrel_215_Factory;
+    if (w === W.DMR_SVK_86) return A.Barrel_560mm_Factory;
+    if (w === W.DMR_SVDM) return A.Barrel_550mm_Factory;
+    // LMGs
+    if (w === W.LMG_L110) return A.Barrel_349mm_SB;
+    if (w === W.LMG_DRS_IAR) return A.Barrel_165_Basic;
+    if (w === W.LMG_M_60) return A.Barrel_17_Factory;
+    if (w === W.LMG_RPKM) return A.Barrel_590mm_Factory;
+    if (w === W.LMG_M123K) return A.Barrel_612mm_VMW;
+    if (w === W.LMG_M250) return A.Barrel_556mm_Prototype;
+    if (w === W.LMG_KTS100_MK8) return A.Barrel_508mm_Mk8;
+    if (w === W.LMG_M240L) return A.Barrel_20_Lima;
+    // SMGs
+    if (w === W.SMG_SGX) return A.Barrel_6_Standard;
+    if (w === W.SMG_PW5A3) return A.Barrel_225mm_Factory;
+    if (w === W.SMG_PW7A2) return A.Barrel_180mm_Standard;
+    if (w === W.SMG_UMG_40) return A.Barrel_200mm_Factory;
+    if (w === W.SMG_USG_90) return A.Barrel_264mm_Factory;
+    if (w === W.SMG_KV9) return A.Barrel_55_Factory;
+    if (w === W.SMG_SCW_10) return A.Barrel_68_Factory;
+    if (w === W.SMG_SL9) return A.Barrel_11_Heavy;
+    // Carbines
+    if (w === W.Carbine_M4A1) return A.Barrel_145_Carbine;
+    if (w === W.Carbine_M277) return A.Barrel_16_Custom;
+    if (w === W.Carbine_AK_205) return A.Barrel_314mm_Prototype;
+    if (w === W.Carbine_M417_A2) return A.Barrel_165_Rifle;
+    if (w === W.Carbine_GRT_BC) return A.Barrel_145_Alt;
+    if (w === W.Carbine_QBZ_192) return A.Barrel_105_Factory;
+    if (w === W.Carbine_SG_553R) return A.Barrel_303mm_LB;
+    if (w === W.Carbine_SOR_300SC) return A.Barrel_105_Custom;
+    return null;
+}
+
+function getStockMagazine(w: mod.Weapons): mod.WeaponAttachments | null {
+    // Assault Rifles
+    if (w === W.AssaultRifle_M433) return A.Magazine_20rnd_Magazine;
+    if (w === W.AssaultRifle_B36A4) return A.Magazine_20rnd_Magazine;
+    if (w === W.AssaultRifle_SOR_556_Mk2) return A.Magazine_20rnd_Magazine;
+    if (w === W.AssaultRifle_AK4D) return A.Magazine_15rnd_Magazine;
+    if (w === W.AssaultRifle_TR_7) return A.Magazine_10rnd_Fast_Mag;
+    if (w === W.AssaultRifle_KORD_6P67) return A.Magazine_30rnd_Magazine;
+    if (w === W.AssaultRifle_NVO_228E) return A.Magazine_20rnd_Magazine;
+    if (w === W.AssaultRifle_L85A3) return A.Magazine_20rnd_Magazine;
+    // Shotguns
+    if (w === W.Shotgun_M87A1) return A.Magazine_5_Shell_Tube;
+    if (w === W.Shotgun_M1014) return A.Magazine_4_Shell_Tube;
+    if (w === W.Shotgun__185KS_K) return A.Magazine_4rnd_Magazine;
+    if (w === W.Shotgun_DB_12) return A.Magazine_7_Shell_Dual_Tubes;
+    // Pistols
+    if (w === W.Sidearm_P18) return A.Magazine_17rnd_Magazine;
+    if (w === W.Sidearm_ES_57) return A.Magazine_20rnd_Magazine;
+    if (w === W.Sidearm_M45A1) return A.Magazine_7rnd_Magazine;
+    if (w === W.Sidearm_M44) return A.Magazine_6rnd_Speedloader;
+    if (w === W.Sidearm_GGH_22) return A.Magazine_15rnd_Magazine;
+    if (w === W.Sidearm_M357_Trait) return A.Magazine_8rnd_Speedloader;
+    // Snipers
+    if (w === W.Sniper_M2010_ESR) return A.Magazine_5rnd_Magazine;
+    if (w === W.Sniper_SV_98) return A.Magazine_10rnd_Magazine;
+    if (w === W.Sniper_PSR) return A.Magazine_7rnd_Magazine;
+    if (w === W.Sniper_Mini_Scout) return A.Magazine_10rnd_Magazine;
+    // DMRs
+    if (w === W.DMR_M39_EMR) return A.Magazine_15rnd_Magazine;
+    if (w === W.DMR_LMR27) return A.Magazine_10rnd_Magazine;
+    if (w === W.DMR_SVK_86) return A.Magazine_10rnd_Magazine;
+    if (w === W.DMR_SVDM) return A.Magazine_5rnd_Magazine;
+    // LMGs
+    if (w === W.LMG_L110) return A.Magazine_100rnd_Belt_Pouch;
+    if (w === W.LMG_DRS_IAR) return A.Magazine_30rnd_Magazine;
+    if (w === W.LMG_M_60) return A.Magazine_50rnd_Loose_Belt;
+    if (w === W.LMG_RPKM) return A.Magazine_30rnd_Magazine;
+    if (w === W.LMG_M123K) return A.Magazine_100rnd_Belt_Pouch;
+    if (w === W.LMG_M250) return A.Magazine_50rnd_Belt_Pouch;
+    if (w === W.LMG_KTS100_MK8) return A.Magazine_45rnd_Magazine;
+    if (w === W.LMG_M240L) return A.Magazine_50rnd_Loose_Belt;
+    // SMGs
+    if (w === W.SMG_SGX) return A.Magazine_30rnd_Magazine;
+    if (w === W.SMG_PW5A3) return A.Magazine_20rnd_Magazine;
+    if (w === W.SMG_PW7A2) return A.Magazine_20rnd_Magazine;
+    if (w === W.SMG_UMG_40) return A.Magazine_25rnd_Magazine;
+    if (w === W.SMG_USG_90) return A.Magazine_50rnd_Magazine;
+    if (w === W.SMG_KV9) return A.Magazine_17rnd_Magazine;
+    if (w === W.SMG_SCW_10) return A.Magazine_15rnd_Magazine;
+    if (w === W.SMG_SL9) return A.Magazine_30rnd_Magazine;
+    // Carbines
+    if (w === W.Carbine_M4A1) return A.Magazine_20rnd_Magazine;
+    if (w === W.Carbine_M277) return A.Magazine_15rnd_Magazine;
+    if (w === W.Carbine_AK_205) return A.Magazine_30rnd_Magazine;
+    if (w === W.Carbine_M417_A2) return A.Magazine_10rnd_Magazine;
+    if (w === W.Carbine_GRT_BC) return A.Magazine_30rnd_Magazine;
+    if (w === W.Carbine_QBZ_192) return A.Magazine_30rnd_Magazine;
+    if (w === W.Carbine_SG_553R) return A.Magazine_20rnd_Magazine;
+    if (w === W.Carbine_SOR_300SC) return A.Magazine_20rnd_Magazine;
+    return null;
+}
+
+// Stock primary weapons pool (all primaries from weapon-configs.ts)
+const STOCK_PRIMARIES: { weapon: mod.Weapons; name: mod.Any }[] = [
+    // Assault Rifles
+    { weapon: W.AssaultRifle_M433, name: SK.weapons.m433 },
+    { weapon: W.AssaultRifle_B36A4, name: SK.weapons.b36a4 },
+    { weapon: W.AssaultRifle_SOR_556_Mk2, name: SK.weapons.sor556mk2 },
+    { weapon: W.AssaultRifle_AK4D, name: SK.weapons.ak4d },
+    { weapon: W.AssaultRifle_TR_7, name: SK.weapons.tr7 },
+    { weapon: W.AssaultRifle_KORD_6P67, name: SK.weapons.kord6p67 },
+    { weapon: W.AssaultRifle_NVO_228E, name: SK.weapons.nvo228e },
+    { weapon: W.AssaultRifle_L85A3, name: SK.weapons.l85a3 },
+    // Shotguns
+    { weapon: W.Shotgun_M87A1, name: SK.weapons.m87a1 },
+    { weapon: W.Shotgun_M1014, name: SK.weapons.m1014 },
+    { weapon: W.Shotgun__185KS_K, name: SK.weapons['185ksk'] },
+    { weapon: W.Shotgun_DB_12, name: SK.weapons.db12 },
+    // Snipers
+    { weapon: W.Sniper_M2010_ESR, name: SK.weapons.m2010 },
+    { weapon: W.Sniper_SV_98, name: SK.weapons.sv98 },
+    { weapon: W.Sniper_PSR, name: SK.weapons.psr },
+    { weapon: W.Sniper_Mini_Scout, name: SK.weapons.miniscout },
+    // DMRs
+    { weapon: W.DMR_M39_EMR, name: SK.weapons.m39emr },
+    { weapon: W.DMR_LMR27, name: SK.weapons.lmr27 },
+    { weapon: W.DMR_SVK_86, name: SK.weapons.svk86 },
+    { weapon: W.DMR_SVDM, name: SK.weapons.svdm },
+    // LMGs
+    { weapon: W.LMG_L110, name: SK.weapons.l110 },
+    { weapon: W.LMG_DRS_IAR, name: SK.weapons.drsiar },
+    { weapon: W.LMG_M_60, name: SK.weapons.m60 },
+    { weapon: W.LMG_RPKM, name: SK.weapons.rpkm },
+    { weapon: W.LMG_M123K, name: SK.weapons.m123k },
+    { weapon: W.LMG_M250, name: SK.weapons.m250 },
+    { weapon: W.LMG_KTS100_MK8, name: SK.weapons.kts100mk8 },
+    { weapon: W.LMG_M240L, name: SK.weapons.m240l },
+    // SMGs
+    { weapon: W.SMG_SGX, name: SK.weapons.sgx },
+    { weapon: W.SMG_PW5A3, name: SK.weapons.pw5a3 },
+    { weapon: W.SMG_PW7A2, name: SK.weapons.pw7a2 },
+    { weapon: W.SMG_UMG_40, name: SK.weapons.umg40 },
+    { weapon: W.SMG_USG_90, name: SK.weapons.usg90 },
+    { weapon: W.SMG_KV9, name: SK.weapons.kv9 },
+    { weapon: W.SMG_SCW_10, name: SK.weapons.scw10 },
+    { weapon: W.SMG_SL9, name: SK.weapons.sl9 },
+    // Carbines
+    { weapon: W.Carbine_M4A1, name: SK.weapons.m4a1 },
+    { weapon: W.Carbine_M277, name: SK.weapons.m277 },
+    { weapon: W.Carbine_AK_205, name: SK.weapons.ak205 },
+    { weapon: W.Carbine_M417_A2, name: SK.weapons.m417a2 },
+    { weapon: W.Carbine_GRT_BC, name: SK.weapons.grtbc },
+    { weapon: W.Carbine_QBZ_192, name: SK.weapons.qbz192 },
+    { weapon: W.Carbine_SG_553R, name: SK.weapons.sg553r },
+    { weapon: W.Carbine_SOR_300SC, name: SK.weapons.sor300sc },
+];
+
+// Stock secondary weapons pool (all pistols from weapon-configs.ts)
+const STOCK_SECONDARIES: { weapon: mod.Weapons; name: mod.Any }[] = [
+    { weapon: W.Sidearm_P18, name: SK.weapons.p18 },
+    { weapon: W.Sidearm_ES_57, name: SK.weapons.es57 },
+    { weapon: W.Sidearm_M45A1, name: SK.weapons.m45a1 },
+    { weapon: W.Sidearm_M44, name: SK.weapons.m44r },
+    { weapon: W.Sidearm_GGH_22, name: SK.weapons.ggh22 },
+    { weapon: W.Sidearm_M357_Trait, name: SK.weapons.m357 },
+];
+
+// Gadget pool - regular gadgets (secondary weapon allowed)
+const GADGET_POOL: { gadget: mod.Gadgets; name: mod.Any; isLauncher?: boolean }[] = [
+    { gadget: G.Class_Adrenaline_Injector, name: SK.gadgets.stim },
+    { gadget: G.Misc_Demolition_Charge, name: SK.gadgets.c4 },
+    { gadget: G.Misc_Anti_Personnel_Mine, name: SK.gadgets.claymore },
+    { gadget: G.Deployable_EOD_Bot, name: SK.gadgets.eod_bot },
+    { gadget: G.Deployable_Recon_Drone, name: SK.gadgets.recon_drone },
+    { gadget: G.Misc_Tracer_Dart, name: SK.gadgets.tracer_dart },
+    // Launchers - no secondary weapon when these are equipped
+    { gadget: G.Launcher_Unguided_Rocket, name: SK.gadgets.launcher_rpg, isLauncher: true },
+    { gadget: G.Launcher_Aim_Guided, name: SK.gadgets.launcher_guided, isLauncher: true },
+    { gadget: G.Launcher_Breaching_Projectile, name: SK.gadgets.launcher_breaching, isLauncher: true },
+    { gadget: G.Launcher_Incendiary_Airburst, name: SK.gadgets.launcher_incendiary, isLauncher: true },
+    { gadget: G.Launcher_Smoke_Grenade, name: SK.gadgets.launcher_smoke, isLauncher: true },
+    { gadget: G.Misc_Incendiary_Round_Shotgun, name: SK.gadgets.incendiary_shotgun, isLauncher: true },
+];
+
+// Throwable pool (includes throwing knife)
+const THROWABLE_POOL: { throwable: mod.Gadgets; name: mod.Any }[] = [
+    { throwable: G.Throwable_Fragmentation_Grenade, name: SK.throwables.frag },
+    { throwable: G.Throwable_Smoke_Grenade, name: SK.throwables.smoke },
+    { throwable: G.Throwable_Flash_Grenade, name: SK.throwables.flash },
+    { throwable: G.Throwable_Stun_Grenade, name: SK.throwables.stun },
+    { throwable: G.Throwable_Incendiary_Grenade, name: SK.throwables.incendiary },
+    { throwable: G.Throwable_Throwing_Knife, name: SK.throwables.throwing_knife },
+    { throwable: G.Throwable_Mini_Frag_Grenade, name: SK.throwables.mini_frag },
+    { throwable: G.Throwable_Anti_Vehicle_Grenade, name: SK.throwables.av_grenade },
+];
+
+// Custom primary weapons with predetermined attachments
+// Secondary, gadget, and throwable are randomized at runtime
+interface CustomPrimary {
+    weapon: mod.Weapons;
+    name: mod.Any;
+    attachments: mod.WeaponAttachments[];
+}
+
+const CUSTOM_PRIMARY_POOL: CustomPrimary[] = [
+    {
+        weapon: W.Sniper_PSR,
+        name: SK.weapons.psr,
+        attachments: [
+            A.Scope_TS_HD_600x,
+            A.Muzzle_Long_Suppressor,
+            A.Barrel_27_MK22,
+            A.Left_Range_Finder,
+            A.Magazine_10rnd_Magazine,
+            A.Ammo_Match_Grade,
+            A.Bottom_Slim_Angled,
+        ],
+    },
+    {
+        weapon: W.LMG_DRS_IAR,
+        name: SK.weapons.drsiar,
+        attachments: [
+            A.Scope_RO_S_125x,
+            A.Muzzle_Lightened_Suppressor,
+            A.Barrel_145_Carbine,
+            A.Bottom_Canted_Stubby,
+            A.Magazine_40rnd_Fast_Mag,
+            A.Top_50_mW_Blue,
+        ],
+    },
+    {
+        weapon: W.AssaultRifle_KORD_6P67,
+        name: SK.weapons.kord6p67,
+        attachments: [
+            A.Scope_SU_123_150x,
+            A.Muzzle_Double_port_Brake,
+            A.Barrel_11_Heavy,
+            A.Bottom_Canted_Stubby,
+            A.Magazine_36rnd_Magazine,
+            A.Right_50_mW_Blue,
+        ],
+    },
+    {
+        weapon: W.Carbine_M277,
+        name: SK.weapons.m277,
+        attachments: [
+            A.Scope_PVQ_31_400x,
+            A.Muzzle_Lightened_Suppressor,
+            A.Barrel_11_Heavy,
+            A.Bottom_Full_Angled,
+            A.Magazine_25rnd_Fast_Mag,
+            A.Ergonomic_Improved_Mag_Catch,
+            A.Top_5_mW_Green,
+        ],
+    },
+    {
+        weapon: W.SMG_UMG_40,
+        name: SK.weapons.umg40,
+        attachments: [
+            A.Scope_Aperture_Sight,
+            A.Right_50_mW_Green,
+            A.Muzzle_CQB_Suppressor,
+            A.Barrel_11_Heavy,
+            A.Bottom_Canted_Stubby,
+            A.Magazine_30rnd_Fast_Mag,
+            A.Ammo_Hollow_Point,
+        ],
+    },
+    {
+        weapon: W.Sniper_Mini_Scout,
+        name: SK.weapons.miniscout,
+        attachments: [
+            A.Scope_S_VPS_600x,
+            A.Scope_Canted_Iron_Sights,
+            A.Muzzle_CQB_Suppressor,
+            A.Barrel_349mm_Fluted,
+            A.Right_120_mW_Blue,
+            A.Bottom_Slim_Angled,
+            A.Magazine_10rnd_Fast_Mag,
+        ],
+    },
+    {
+        weapon: W.Shotgun_M87A1,
+        name: SK.weapons.m87a1,
+        attachments: [A.Scope_Iron_Sights, A.Bottom_Full_Angled, A.Right_50_mW_Green, A.Left_Flashlight],
+    },
+    {
+        weapon: W.Shotgun_DB_12,
+        name: SK.weapons.db12,
+        attachments: [A.Scope_Iron_Sights, A.Bottom_Full_Angled, A.Right_50_mW_Green],
+    },
+    {
+        weapon: W.Sniper_SV_98,
+        name: SK.weapons.sv98,
+        attachments: [
+            A.Scope_TS_HD_600x,
+            A.Scope_Canted_Iron_Sights,
+            A.Muzzle_Long_Suppressor,
+            A.Barrel_27_MK22,
+            A.Right_120_mW_Blue,
+            A.Bottom_Slim_Angled,
+            A.Magazine_10rnd_Magazine,
+        ],
+    },
+    {
+        weapon: W.SMG_KV9,
+        name: SK.weapons.kv9,
+        attachments: [
+            A.Scope_Aperture_Sight,
+            A.Right_50_mW_Green,
+            A.Muzzle_CQB_Suppressor,
+            A.Barrel_11_Heavy,
+            A.Bottom_Canted_Stubby,
+            A.Magazine_30rnd_Fast_Mag,
+            A.Ammo_Hollow_Point,
+        ],
+    },
+    {
+        weapon: W.LMG_M240L,
+        name: SK.weapons.m240l,
+        attachments: [
+            A.Scope_SU_123_150x,
+            A.Muzzle_Long_Suppressor,
+            A.Barrel_20_Long,
+            A.Right_50_mW_Green,
+            A.Bottom_Classic_Grip_Pod,
+            A.Magazine_75rnd_Belt_Box,
+        ],
+    },
+    {
+        weapon: W.Carbine_GRT_BC,
+        name: SK.weapons.grtbc,
+        attachments: [
+            A.Scope_RO_M_175x,
+            A.Muzzle_Lightened_Suppressor,
+            A.Right_50_mW_Blue,
+            A.Bottom_Low_Profile_Stubby,
+            A.Magazine_30rnd_Fast_Mag,
+            A.Ergonomic_Improved_Mag_Catch,
+        ],
+    },
+    {
+        weapon: W.AssaultRifle_TR_7,
+        name: SK.weapons.tr7,
+        attachments: [
+            A.Scope_Osa_7_100x,
+            A.Muzzle_Compensated_Brake,
+            A.Top_50_mW_Blue,
+            A.Barrel_17_Fluted,
+            A.Magazine_30rnd_Magazine,
+            A.Ergonomic_Improved_Mag_Catch,
+        ],
+    },
+    {
+        weapon: W.DMR_SVDM,
+        name: SK.weapons.svdm,
+        attachments: [
+            A.Scope_ST_Prism_500x,
+            A.Magazine_20rnd_Magazine,
+            A.Bottom_Slim_Angled,
+            A.Barrel_565mm_Fluted,
+            A.Muzzle_Lightened_Suppressor,
+            A.Right_120_mW_Blue,
+            A.Scope_Canted_Iron_Sights,
+            A.Ergonomic_Improved_Mag_Catch,
+        ],
+    },
+    {
+        weapon: W.DMR_M39_EMR,
+        name: SK.weapons.m39emr,
+        attachments: [
+            A.Scope_Iron_Sights,
+            A.Muzzle_Linear_Comp,
+            A.Barrel_16_Short,
+            A.Right_50_mW_Blue,
+            A.Bottom_Bipod,
+            A.Magazine_15rnd_Magazine,
+            A.Ammo_Hollow_Point,
+        ],
+    },
+    {
+        weapon: W.AssaultRifle_M433,
+        name: SK.weapons.m433,
+        attachments: [
+            A.Scope_Iron_Sights,
+            A.Muzzle_Double_port_Brake,
+            A.Barrel_165_Fluted,
+            A.Magazine_20rnd_Magazine,
+            A.Ergonomic_Match_Trigger,
+            A.Ammo_Polymer_Case,
+            A.Left_120_mW_Blue,
+            A.Right_Flashlight,
+        ],
+    },
+    {
+        weapon: W.Carbine_M417_A2,
+        name: SK.weapons.m417a2,
+        attachments: [
+            A.Scope_GRIM_150x,
+            A.Muzzle_Standard_Suppressor,
+            A.Barrel_165_Basic,
+            A.Magazine_20rnd_Fast_Mag,
+            A.Ergonomic_Magwell_Flare,
+            A.Bottom_6H64_Vertical,
+            A.Top_50_mW_Blue,
+        ],
+    },
+];
+
+// Custom secondary weapons with predetermined attachments (primary empty)
+interface CustomSecondary {
+    weapon: mod.Weapons;
+    name: mod.Any;
+    attachments: mod.WeaponAttachments[];
+}
+
+const CUSTOM_SECONDARY_POOL: CustomSecondary[] = [
+    {
+        weapon: W.Sidearm_ES_57,
+        name: SK.weapons.es57,
+        attachments: [A.Scope_RO_S_125x, A.Muzzle_CQB_Suppressor, A.Barrel_5_Pencil, A.Ergonomic_Improved_Mag_Catch],
+    },
+    {
+        weapon: W.Sidearm_M44,
+        name: SK.weapons.m44r,
+        attachments: [A.Scope_Iron_Sights, A.Barrel_65_Extended, A.Ammo_Hollow_Point],
+    },
+    {
+        weapon: W.Sidearm_M45A1,
+        name: SK.weapons.m45a1,
+        attachments: [
+            A.Scope_R_MR_100x,
+            A.Muzzle_Single_port_Brake,
+            A.Barrel_5_Pencil,
+            A.Magazine_11rnd_Magazine,
+            A.Ergonomic_Improved_Mag_Catch,
+        ],
+    },
+];
+
+// Helper to pick random from array (simple random, allows repeats)
+function randomFrom<T>(arr: T[]): T {
+    return arr[Math.floor(Math.random() * arr.length)];
+}
+
+// Shuffle bag system - picks without replacement until all items used, then refills
+let remainingCustomPrimaries: CustomPrimary[] = [];
+let remainingCustomSecondaries: CustomSecondary[] = [];
+let remainingStockPrimaries: { weapon: mod.Weapons; name: mod.Any }[] = [];
+let remainingStockSecondaries: { weapon: mod.Weapons; name: mod.Any }[] = [];
+
+function pickFromBag<T>(remaining: T[], source: T[]): T {
+    if (remaining.length === 0) {
+        remaining.push(...source);
+    }
+    const index = Math.floor(Math.random() * remaining.length);
+    return remaining.splice(index, 1)[0];
+}
+
+// Generate a random loadout
+// 40% chance for custom primary, 60% chance for stock
+// Secondary, gadget, and throwable are always randomized
+// Custom secondaries always keep secondary even with launcher, stock secondaries removed with launcher
+function getRandomLoadout(): Loadout {
+    const gadget = randomFrom(GADGET_POOL);
+    const throwable = randomFrom(THROWABLE_POOL);
+    const isLauncher = gadget.isLauncher === true;
+
+    // Pick random secondary (50% custom, 50% stock)
+    // Custom secondaries are kept even with launcher, stock secondaries are removed with launcher
+    let secondary: mod.Weapons | null = null;
+    let secondaryName: mod.Any = SK.throwables.none;
+    let secondaryAttachments: mod.WeaponAttachments[] | undefined;
+    let isCustomSecondary = false;
+
+    if (Math.random() < 0.5 && CUSTOM_SECONDARY_POOL.length > 0) {
+        // Custom secondary - always kept, even with launcher
+        const customSec = pickFromBag(remainingCustomSecondaries, CUSTOM_SECONDARY_POOL);
+        secondary = customSec.weapon;
+        secondaryName = customSec.name;
+        secondaryAttachments = getCompleteAttachments(customSec.weapon, customSec.attachments);
+        isCustomSecondary = true;
+    } else if (!isLauncher) {
+        // Stock secondary - only given if no launcher
+        const stockSec = pickFromBag(remainingStockSecondaries, STOCK_SECONDARIES);
+        secondary = stockSec.weapon;
+        secondaryName = stockSec.name;
+        secondaryAttachments = getStockAttachments(stockSec.weapon);
+    }
+    // If launcher and not custom secondary, secondary stays null
+
+    // 40% custom primary, 60% stock primary
+    if (Math.random() < 0.4) {
+        const customPri = pickFromBag(remainingCustomPrimaries, CUSTOM_PRIMARY_POOL);
+        return {
+            primary: customPri.weapon,
+            secondary: secondary as mod.Weapons,
+            gadget: gadget.gadget,
+            throwable: throwable.throwable,
+            primaryName: customPri.name,
+            secondaryName: secondaryName,
+            gadgetName: gadget.name,
+            throwableName: throwable.name,
+            primaryAttachments: getCompleteAttachments(customPri.weapon, customPri.attachments),
+            secondaryAttachments: secondaryAttachments,
+        };
+    }
+
+    // Stock primary (always has secondary already selected above)
+    const stockPri = pickFromBag(remainingStockPrimaries, STOCK_PRIMARIES);
+    return {
+        primary: stockPri.weapon,
+        secondary: secondary as mod.Weapons,
+        gadget: gadget.gadget,
+        throwable: throwable.throwable,
+        primaryName: stockPri.name,
+        secondaryName: secondaryName,
+        gadgetName: gadget.name,
+        throwableName: throwable.name,
+        primaryAttachments: getStockAttachments(stockPri.weapon),
+        secondaryAttachments: secondaryAttachments,
+    };
+}
+
+// NOTE: the old random-split balanceTeams() + shuffleArray() were removed. They
+// called mod.SetTeam on EVERY human (throwing "team input invalid" for anyone
+// already on the target team) and forced a fixed split. Replaced by reconcileTeams()
+// + computeTargetTeamSize() (dynamic bot sizing) above. See TEAM-SORTING-SPEC.md.
+
+// Initialize game when mode starts
+Events.OnGameModeStarted.subscribe(() => {
+    logMain('========== GAME MODE STARTED ==========');
+    Tlm.event('mode.start');
+    startPerfHeartbeat(2);
+    debugSimulateTeamSorting();
+
+    // Start helper stats logging (logs every 5 seconds)
+    startHelperStatsLogging();
+
+    // Reset round scores
+    resetScores();
+
+    // Randomize bot names for this match
+    randomizeBotNames();
+
+    // Initialize custom scoreboard
+    initScoreboard();
+
+    // Initialize flag capture system
+    flagCaptureUI = new FlagCaptureUI();
+    flagCaptureUI.init();
+    flagCaptureUI.setCallbacks(
+        handleFlagCapture,
+        handlePauseCountdown,
+        handleResumeCountdown,
+        handlePlayCaptureVO,
+        handlePlayContestedVO
+    );
+
+    // Initialize spawn positions early
+    initSpawnPositions();
+
+    // Ensure a human on each team (rule 1); bot backfill sizes the teams to the human count.
+    reconcileTeams();
+
+    // Set spawn mode to auto spawn (must be done after game mode starts)
+    mod.SetSpawnMode(mod.SpawnModes.AutoSpawn);
+
+    // Deploy all players immediately
+    mod.DeployAllPlayers();
+});
+
+// Flag capture callbacks
+function handleFlagCapture(teamId: number): void {
+    if (roundEnding) return;
+    roundEnding = true;
+
+    // Stop bot targeting when round ends
+    if (ENABLE_CUSTOM_BOTS) {
+        stopBotTargeting();
+    }
+
+    adminDebugTool?.dynamicLog(`Team ${teamId} captured the flag!`);
+
+    // Record captures for players on the flag (within capture radius)
+    const flagPos = flagCaptureUI?.getFlagPosition();
+    if (flagPos) {
+        const capturingTeamPlayers = getAlivePlayersOnTeam(teamId);
+        for (const player of capturingTeamPlayers) {
+            try {
+                const playerPos = mod.GetSoldierState(player, mod.SoldierStateVector.GetPosition);
+                const distance = mod.DistanceBetween(playerPos, flagPos);
+                if (distance <= 3) {
+                    // 3m capture radius (same as FLAG_CAPTURE_RADIUS)
+                    const stats = getStatsForPlayer(player);
+                    stats.captures++;
+                    updateScoreboard(player);
+                }
+            } catch {}
+        }
+    }
+
+    // Hide flag UI
+    flagCaptureUI?.hide();
+
+    // Get all players for cleanup
+    const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+    const alivePlayers: mod.Player[] = [];
+
+    for (const player of allPlayers) {
+        try {
+            const isAlive = mod.GetSoldierState(player, mod.SoldierStateBool.IsAlive);
+            if (isAlive) {
+                mod.Heal(player, 1000);
+                // Remove equipment
+                removeAllEquipment(player);
+                // Make bots idle with no target
+                if (mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) {
+                    mod.AIIdleBehavior(player);
+                    mod.AIEnableShooting(player, false);
+                    mod.AIEnableTargeting(player, false);
+                }
+                alivePlayers.push(player);
+            } else {
+                mod.UndeployPlayer(player);
+            }
+        } catch {}
+    }
+
+    // Freeze players
+    if (alivePlayers.length > 0) {
+        countdownUI?.freezeAllPlayers(alivePlayers);
+    }
+
+    // Hide UI and show results
+    countdownUI?.stop();
+    hideEliminationEffect();
+    showRoundResults(teamId, 5000, true); // isFlagCapture = true for objective captured/lost
+    playRoundProgressVO(teamId);
+
+    // Check for match win IMMEDIATELY after score update
+    const scores = getScores();
+    const matchWinScore = 6;
+    const isMatchWon = scores.team1 >= matchWinScore || scores.team2 >= matchWinScore;
+
+    if (isMatchWon) {
+        // Set flag immediately to prevent any new round from starting
+        matchEnding = true;
+
+        // Wait for result screen (3 seconds), then cleanup and end game
+        Timers.setTimeout(() => {
+            const winningTeamObj = mod.GetTeam(scores.team1 >= matchWinScore ? 1 : 2);
+            adminDebugTool?.dynamicLog(
+                `Match over! Team ${scores.team1 >= matchWinScore ? 1 : 2} wins ${scores.team1}-${scores.team2}`
+            );
+            endMatchDeployed(winningTeamObj);
+        }, 3000);
+        return;
+    }
+
+    // Continue to next round after 5 seconds (only if match not won)
+    Timers.setTimeout(() => {
+        if (matchEnding) return; // Don't start new round if match is ending
+
+        const nextRound = roundNumber + 1;
+        if (nextRound > 1 && (nextRound - 1) % 3 === 0) {
+            sidesSwapped = !sidesSwapped;
+            adminDebugTool?.dynamicLog(`Sides swapped before deploy! sidesSwapped=${sidesSwapped}`);
+            playVO(mod.VoiceOverEvents2D.RoundSwitchSides);
+        }
+
+        deployAllAtStartPositions(() => {
+            const allPlayersNow = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+            countdownUI?.freezeAllPlayers(allPlayersNow);
+
+            Timers.setTimeout(() => {
+                resetRound();
+            }, 500);
+        });
+    }, 5000);
+}
+
+function handlePauseCountdown(): void {
+    countdownUI?.pauseAllCountdowns();
+}
+
+function handleResumeCountdown(): void {
+    countdownUI?.resumeAllCountdowns();
+}
+
+function handlePlayCaptureVO(capturingTeamId: number): void {
+    // Play ObjectiveCapturing to the capturing team (friendly)
+    const capturingTeam = mod.GetTeam(capturingTeamId);
+    playVO(mod.VoiceOverEvents2D.ObjectiveCapturing, capturingTeam);
+
+    // Play ObjectiveContested to the other team (enemy)
+    const otherTeamId = capturingTeamId === 1 ? 2 : 1;
+    const otherTeam = mod.GetTeam(otherTeamId);
+    playVO(mod.VoiceOverEvents2D.ObjectiveContested, otherTeam);
+}
+
+function handlePlayContestedVO(): void {
+    // Play ObjectiveContested to both teams when flag becomes contested
+    playVO(mod.VoiceOverEvents2D.ObjectiveContested, mod.GetTeam(1));
+    playVO(mod.VoiceOverEvents2D.ObjectiveContested, mod.GetTeam(2));
+}
+
+function handleOvertimeStart(): void {
+    adminDebugTool?.dynamicLog('Overtime started - raising flag!');
+    flagCaptureUI?.raiseFlag();
+
+    // Notify bots about flag spawn (20% chance each bot becomes interested)
+    if (ENABLE_CUSTOM_BOTS) {
+        notifyBotsOfFlagSpawn();
+    }
+}
+
+// Inputs to block when freezing players (same as countdown-ui.ts)
+const FREEZE_BLOCKED_INPUTS = [
+    mod.RestrictedInputs.CycleFire,
+    mod.RestrictedInputs.FireWeapon,
+    mod.RestrictedInputs.Interact,
+    mod.RestrictedInputs.Jump,
+    mod.RestrictedInputs.MoveForwardBack,
+    mod.RestrictedInputs.MoveLeftRight,
+    mod.RestrictedInputs.Reload,
+    mod.RestrictedInputs.SelectCharacterGadget,
+    mod.RestrictedInputs.SelectMelee,
+    mod.RestrictedInputs.SelectOpenGadget,
+    mod.RestrictedInputs.SelectThrowable,
+    mod.RestrictedInputs.Sprint,
+];
+
+function freezePlayer(player: mod.Player): void {
+    try {
+        const isAI = mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier);
+
+        if (isAI) {
+            mod.AISetStance(player, mod.Stance.Stand);
+            mod.AIIdleBehavior(player);
+            mod.AIEnableShooting(player, false);
+            mod.AIEnableTargeting(player, false);
+        } else {
+            for (const input of FREEZE_BLOCKED_INPUTS) {
+                mod.EnableInputRestriction(player, input, true);
+            }
+        }
+    } catch {
+        // Player might be invalid
+    }
+}
 
 async function spawnVehicle(player: mod.Player, vehicleType: mod.VehicleList): Promise<void> {
     const playerPosition = mod.GetSoldierState(player, mod.SoldierStateVector.GetPosition);
@@ -80,6 +2296,9 @@ async function spawnVehicle(player: mod.Player, vehicleType: mod.VehicleList): P
 }
 
 function createAdminDebugTool(player: mod.Player): void {
+    // Skip debug tool in production mode
+    if (PRODUCTION_MODE) return;
+
     // The admin player is player id 0 for non-persistent test servers,
     // so don't do the rest of this unless it's the admin player.
     if (mod.GetObjId(player) != 0) return;
@@ -126,8 +2345,13 @@ function destroyAdminDebugTool(playerId: number): void {
     // destroy the debug tool.
     Timers.clearInterval(telemetryInterval);
     adminDebugTool?.destroy();
+    countdownUI?.destroy();
+    flagCaptureUI?.destroy();
+    cleanupCustomBots(); // Clean up custom bots
     telemetryInterval = undefined;
     adminDebugTool = undefined;
+    countdownUI = undefined;
+    flagCaptureUI = undefined;
 }
 
 function showTelemetry(player: mod.Player): void {
@@ -159,27 +2383,907 @@ function stopTelemetry(player: mod.Player): void {
 }
 
 function handlePlayerDeployed(player: mod.Player): void {
+    // Match is ending: endMatchDeployed() force-deploys everyone so the next map
+    // loads cleanly and nobody is stuck spectating. Do NO round logic in that state.
+    if (matchEnding) return;
+
+    const playerId = mod.GetObjId(player);
+
+    // During round reset, teleport player to correct side
+    if (resettingRound) {
+        // Skip if player was already teleported this round (prevents double-teleport)
+        if (teleportedThisRound.has(playerId)) {
+            return;
+        }
+
+        // Ensure spawn positions are initialized
+        initSpawnPositions();
+
+        // Teleport player to correct position based on side swap
+        // Uses sequential position assignment to avoid overlapping spawns
+        try {
+            const playerTeam = mod.GetTeam(player);
+            const team1 = mod.GetTeam(1);
+            const isTeam1 = mod.GetObjId(playerTeam) === mod.GetObjId(team1);
+            const teamId = isTeam1 ? 1 : 2;
+
+            // Get next available spawn position for this team
+            const pos = getNextSpawnPosition(teamId);
+
+            if (pos) {
+                // Mark as teleported before teleporting
+                teleportedThisRound.add(playerId);
+
+                // Calculate facing angle toward flag (in radians)
+                const flagPos = flagCaptureUI?.getFlagPosition();
+                let facingAngle = 0;
+                if (flagPos) {
+                    const dx = mod.XComponentOf(flagPos) - mod.XComponentOf(pos);
+                    const dz = mod.ZComponentOf(flagPos) - mod.ZComponentOf(pos);
+                    facingAngle = Math.atan2(dx, dz);
+                }
+                mod.Teleport(player, pos, facingAngle);
+                // Teleport again after short delay to ensure facing direction sticks
+                Timers.setTimeout(() => {
+                    try {
+                        if (mod.IsPlayerValid(player)) {
+                            mod.Teleport(player, pos, facingAngle);
+                        }
+                    } catch {}
+                }, 100);
+                adminDebugTool?.dynamicLog(`Teleported player ${playerId} to team ${teamId} spawn position`);
+            }
+        } catch {
+            // Player might be invalid
+        }
+
+        return;
+    }
+
+    // Block spawns during active round (after countdown ends).
+    // NOT during the round transition (roundEnding) — that's the legit redeploy of everyone for
+    // the next round; rejecting it here undeploys the player and flashes them into spectator.
+    if (roundStarted && countdownUI && !countdownUI.isRunning && !roundEnding) {
+        adminDebugTool?.dynamicLog(`Blocking mid-round spawn for player ${playerId}`);
+        rejectPlayer(playerId); // Mark as rejected to exclude from health calculations
+        try {
+            mod.UndeployPlayer(player);
+        } catch (e) {
+            // Player might be invalid
+        }
+        return;
+    }
+
     // Log a message to the dynamic logger that the player has deployed.
-    adminDebugTool?.dynamicLog(`Player ${mod.GetObjId(player)} deployed.`);
+    adminDebugTool?.dynamicLog(`Player ${playerId} deployed.`);
 
-    // Get the current map (Can be undefined if the map cannot be determined).
-    const map = MapDetector.currentMap();
+    // Handle human player deployment
+    const isHuman = !mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier);
 
-    if (map) {
-        mod.DisplayNotificationMessage(
-            mod.Message(mod.stringkeys.template.notifications.deployedOnMap, player, mod.stringkeys.template.maps[map]),
-            player
-        );
-    } else {
-        mod.DisplayNotificationMessage(mod.Message(mod.stringkeys.template.notifications.deployed, player), player);
+    if (isHuman) {
+        // Play player join sound for all human players
+        const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+        for (const p of allPlayers) {
+            try {
+                if (mod.IsPlayerValid(p) && !mod.GetSoldierState(p, mod.SoldierStateBool.IsAISoldier)) {
+                    playSound(p, SOUNDS.PLAYER_JOIN);
+                }
+            } catch {}
+        }
+
+        // Undeploy a bot from this player's team to make room
+        if (ENABLE_CUSTOM_BOTS) {
+            try {
+                const playerTeam = mod.GetTeam(player);
+                const team1 = mod.GetTeam(1);
+                const teamId = mod.GetObjId(playerTeam) === mod.GetObjId(team1) ? 1 : 2;
+
+                // Check if there are too many players on the team (humans + bots > max)
+                const totalOnTeam = getPlayersOnTeam(teamId).length;
+                if (totalOnTeam > PLAYERS_PER_TEAM) {
+                    adminDebugTool?.dynamicLog(`Team ${teamId} has ${totalOnTeam} players, undeploying a bot`);
+                    undeployBotForTeam(teamId);
+                }
+            } catch {}
+        }
+    }
+
+    // Start the round countdown (only once per round, triggered by first deploy)
+    if (!roundStarted) {
+        roundStarted = true;
+        roundNumber++;
+
+        // Wait briefly for all players to deploy before starting the round
+        Timers.setTimeout(() => {
+            startRound();
+        }, 500);
+    } else if (countdownUI?.isRunning && currentLoadout) {
+        // Late-deploying player during countdown - apply restrictions and loadout
+        adminDebugTool?.dynamicLog(`Late deploy during countdown - applying loadout to player ${playerId}`);
+        countdownUI.addLatePlayer(player, currentLoadout);
+    } else if (roundStarted && !roundEnding) {
+        // Player deployed during the waiting period before countdown starts
+        // Freeze them immediately - they'll be processed when countdown starts
+        adminDebugTool?.dynamicLog(`Player ${playerId} deployed during pre-countdown wait - freezing`);
+        freezePlayer(player);
     }
 }
+
+function startRound(): void {
+    _roundStarts++;
+    logMain('========== START ROUND ==========', { roundNumber, totalRoundStarts: _roundStarts });
+
+    // Don't start a new round if match is ending (team reached 6 wins)
+    if (matchEnding) {
+        logMain('startRound SKIPPED - match ending');
+        return;
+    }
+
+    // Clear any rejected players from previous round
+    clearRejectedPlayers();
+
+    // Reset round ending flag
+    roundEnding = false;
+
+    // Initialize spawn positions from spatial objects
+    initSpawnPositions();
+
+    // Reset spawn indices for sequential position assignment
+    resetSpawnIndices();
+
+    // Spawn backfill bots to fill empty slots
+    if (ENABLE_CUSTOM_BOTS) {
+        spawnBackfillBots();
+        freezeBots(); // Start frozen until countdown ends
+    }
+
+    // Get all players on each team (includes bots)
+    const team1 = getPlayersOnTeam(1);
+    const team2 = getPlayersOnTeam(2);
+
+    adminDebugTool?.dynamicLog(`Starting round ${roundNumber} with ${team1.length} vs ${team2.length} players`);
+
+    // Create countdown UI if it doesn't exist (shown to all players)
+    if (!countdownUI) {
+        countdownUI = new CountdownUI();
+    }
+
+    // Get random loadout every 2 rounds (rounds 1-2 share loadout, 3-4 share, etc.)
+    // Change loadout on odd rounds: 1, 3, 5, 7...
+    if (roundNumber % 2 === 1 || !currentLoadout) {
+        currentLoadout = getRandomLoadout();
+        adminDebugTool?.dynamicLog(`New loadout for rounds ${roundNumber}-${roundNumber + 1}`);
+    } else {
+        adminDebugTool?.dynamicLog(`Keeping same loadout from round ${roundNumber - 1}`);
+    }
+
+    // First round: 15 seconds, subsequent rounds: 5 seconds
+    const countdownTime = roundNumber === 1 ? 15 : 5;
+
+    // Check for match point (5 wins = one round away from winning)
+    const scores = getScores();
+    if (scores.team1 === 5 || scores.team2 === 5) {
+        // Play match point VO for the team that's at match point
+        const matchPointTeam = mod.GetTeam(scores.team1 === 5 ? 1 : 2);
+        playVO(mod.VoiceOverEvents2D.RoundLastRound, matchPointTeam);
+        adminDebugTool?.dynamicLog(`Match point for team ${scores.team1 === 5 ? 1 : 2}!`);
+    }
+
+    // Prepare spawn positions based on side swap
+    // Team 1 normally uses side 1, Team 2 normally uses side 2
+    // When swapped, teams use opposite sides
+    const spawnPositions = {
+        team1: sidesSwapped ? side2SpawnPositions : side1SpawnPositions,
+        team2: sidesSwapped ? side1SpawnPositions : side2SpawnPositions,
+    };
+
+    adminDebugTool?.dynamicLog(
+        `Spawn positions: team1=${spawnPositions.team1.length}, team2=${spawnPositions.team2.length}, sidesSwapped=${sidesSwapped}`
+    );
+
+    // Reset flag capture UI for new round (hide flag underground)
+    flagCaptureUI?.resetForRound();
+
+    // Set flag position for player facing direction
+    const flagPos = flagCaptureUI?.getFlagPosition();
+    if (flagPos) {
+        countdownUI.setFlagPosition(flagPos);
+    }
+
+    // Start countdown with spawn positions - countdown UI handles teleporting and freezing
+    // Pass callback to activate bots when countdown ends
+    countdownUI.start(
+        countdownTime,
+        team1,
+        team2,
+        currentLoadout,
+        spawnPositions,
+        handleRoundTimeEnd,
+        handleOvertimeStart,
+        handleCountdownEnd
+    );
+}
+
+// Called when countdown ends and players are unfrozen
+function handleCountdownEnd(): void {
+    // Activate custom bots - set aggressive behavior and start targeting
+    if (ENABLE_CUSTOM_BOTS) {
+        activateBots();
+    }
+}
+
+function handleRoundTimeEnd(): void {
+    // Time ran out - determine winner by total team health
+    if (roundEnding || !roundStarted || resettingRound) return;
+
+    // Stop bot targeting when round ends
+    if (ENABLE_CUSTOM_BOTS) {
+        stopBotTargeting();
+    }
+
+    adminDebugTool?.dynamicLog('Round time ended - determining winner by health');
+
+    // Get team health totals
+    const team1Players = getAlivePlayersOnTeam(1);
+    const team2Players = getAlivePlayersOnTeam(2);
+
+    let team1Health = 0;
+    let team2Health = 0;
+
+    for (const player of team1Players) {
+        try {
+            team1Health += mod.GetSoldierState(player, mod.SoldierStateNumber.NormalizedHealth) * 100;
+        } catch {
+            // Player invalid
+        }
+    }
+
+    for (const player of team2Players) {
+        try {
+            team2Health += mod.GetSoldierState(player, mod.SoldierStateNumber.NormalizedHealth) * 100;
+        } catch {
+            // Player invalid
+        }
+    }
+
+    adminDebugTool?.dynamicLog(`Time up! Team1 health: ${team1Health}, Team2 health: ${team2Health}`);
+
+    // Check for tied health (round draw)
+    const isHealthTied = team1Health === team2Health;
+
+    // Trigger round end
+    roundEnding = true;
+
+    // Undeploy dead players, heal and freeze alive players
+    const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+    const alivePlayers: mod.Player[] = [];
+
+    for (const player of allPlayers) {
+        try {
+            const isAlive = mod.GetSoldierState(player, mod.SoldierStateBool.IsAlive);
+
+            if (isAlive) {
+                mod.Heal(player, 1000);
+                // Remove all equipment except primary and secondary
+                removeAllEquipment(player);
+                // Make bots idle with no target
+                if (mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) {
+                    mod.AIIdleBehavior(player);
+                    mod.AIEnableShooting(player, false);
+                    mod.AIEnableTargeting(player, false);
+                }
+                alivePlayers.push(player);
+            } else {
+                mod.UndeployPlayer(player);
+            }
+        } catch {
+            // Player invalid
+        }
+    }
+
+    // Freeze all alive players (input restrictions for humans)
+    if (alivePlayers.length > 0) {
+        countdownUI?.freezeAllPlayers(alivePlayers);
+    }
+
+    countdownUI?.stop();
+    hideEliminationEffect();
+    flagCaptureUI?.hide();
+
+    // Show draw or win/loss based on health comparison
+    if (isHealthTied) {
+        adminDebugTool?.dynamicLog('Health tied - round draw!');
+        showRoundDraw();
+    } else {
+        const winningTeam = team1Health > team2Health ? 1 : 2;
+        // Health-based win (timer ran out) - pass isHealthWin: true
+        showRoundResults(winningTeam, 5000, false, true);
+        playRoundProgressVO(winningTeam);
+    }
+
+    // Check for match win IMMEDIATELY after score update (only if not a draw)
+    if (!isHealthTied) {
+        const scores = getScores();
+        const matchWinScore = 6;
+        const isMatchWon = scores.team1 >= matchWinScore || scores.team2 >= matchWinScore;
+
+        if (isMatchWon) {
+            // Set flag immediately to prevent any new round from starting
+            matchEnding = true;
+
+            // Wait for result screen (3 seconds), then cleanup and end game
+            Timers.setTimeout(() => {
+                const winningTeamObj = mod.GetTeam(scores.team1 >= matchWinScore ? 1 : 2);
+                adminDebugTool?.dynamicLog(
+                    `Match over! Team ${scores.team1 >= matchWinScore ? 1 : 2} wins ${scores.team1}-${scores.team2}`
+                );
+                endMatchDeployed(winningTeamObj);
+            }, 3000);
+            return;
+        }
+    }
+
+    // Continue to next round after 5 seconds (only if match not won)
+    Timers.setTimeout(() => {
+        if (matchEnding) return; // Don't start new round if match is ending
+
+        // Calculate the next round number and swap sides if needed BEFORE teleporting
+        const nextRound = roundNumber + 1;
+        if (nextRound > 1 && (nextRound - 1) % 3 === 0) {
+            sidesSwapped = !sidesSwapped;
+            adminDebugTool?.dynamicLog(`Sides swapped before deploy! sidesSwapped=${sidesSwapped}`);
+            playVO(mod.VoiceOverEvents2D.RoundSwitchSides);
+        }
+
+        deployAllAtStartPositions(() => {
+            const allPlayersNow = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+            countdownUI?.freezeAllPlayers(allPlayersNow);
+
+            Timers.setTimeout(() => {
+                resetRound();
+            }, 500);
+        });
+    }, 5000);
+}
+
+function resetRound(): void {
+    // Don't reset if match is ending
+    if (matchEnding) return;
+
+    // Players are already deployed and frozen from the round end sequence
+    // Just need to clear states and start the next round countdown
+
+    // Prevent handlePlayerDeployed from interfering during reset
+    resettingRound = true;
+
+    // Reset spawn position indices for new round (ensures sequential assignment)
+    resetSpawnIndices();
+
+    // Stop the countdown UI (hides team health, etc.)
+    countdownUI?.stop();
+
+    // Reset elimination tracking for new round
+    resetEliminationTracking();
+
+    // Reset bot identity active states (stats are preserved)
+    if (ENABLE_CUSTOM_BOTS) {
+        resetBotIdentitiesForRound();
+    }
+
+    // Reset last killer tracking
+    lastKiller = null;
+
+    // Increment round number and start the countdown
+    // Note: Side swap is handled in endRound BEFORE deployment so teleport uses correct positions
+    roundNumber++;
+
+    roundStarted = true;
+    resettingRound = false;
+
+    startRound();
+}
+
+function checkRoundEnd(): void {
+    _eliminationChecks++;
+    // Don't check if already ending, not started, or countdown still running
+    if (roundEnding || !roundStarted || resettingRound) {
+        logMain('checkRoundEnd SKIPPED', { roundEnding, roundStarted, resettingRound });
+        return;
+    }
+    if (countdownUI?.isRunning) {
+        logMain('checkRoundEnd SKIPPED - countdown running');
+        return;
+    }
+
+    const team1Alive = getAlivePlayersOnTeam(1);
+    const team2Alive = getAlivePlayersOnTeam(2);
+
+    logMain('checkRoundEnd', {
+        team1Alive: team1Alive.length,
+        team2Alive: team2Alive.length,
+        totalChecks: _eliminationChecks,
+    });
+    adminDebugTool?.dynamicLog(`Round check: Team1=${team1Alive.length} Team2=${team2Alive.length}`);
+
+    // Check if a team has been eliminated
+    if (team1Alive.length === 0 || team2Alive.length === 0) {
+        // Prevent duplicate round end processing
+        _roundEnds++;
+        logMain('========== ROUND ENDING ==========', {
+            roundNumber,
+            totalRoundEnds: _roundEnds,
+            team1Alive: team1Alive.length,
+            team2Alive: team2Alive.length,
+        });
+        roundEnding = true;
+
+        // Stop bot targeting when round ends
+        if (ENABLE_CUSTOM_BOTS) {
+            stopBotTargeting();
+        }
+
+        // Check for mutual elimination (both teams wiped out at the same time)
+        const isMutualElimination = team1Alive.length === 0 && team2Alive.length === 0;
+
+        if (isMutualElimination) {
+            adminDebugTool?.dynamicLog('Mutual elimination - round draw!');
+        } else {
+            const winningTeam = team1Alive.length > 0 ? 1 : 2;
+            adminDebugTool?.dynamicLog(`Team ${winningTeam} wins the round!`);
+        }
+
+        // Undeploy dead players, heal and freeze alive players
+        const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+        const alivePlayers: mod.Player[] = [];
+
+        for (const player of allPlayers) {
+            try {
+                const isAlive = mod.GetSoldierState(player, mod.SoldierStateBool.IsAlive);
+
+                if (isAlive) {
+                    // Heal to 100
+                    mod.Heal(player, 1000);
+                    // Remove all equipment except primary and secondary
+                    removeAllEquipment(player);
+                    // Make bots idle with no target
+                    if (mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) {
+                        mod.AIIdleBehavior(player);
+                        mod.AIEnableShooting(player, false);
+                        mod.AIEnableTargeting(player, false);
+                    }
+                    alivePlayers.push(player);
+                } else {
+                    // Undeploy dead players
+                    mod.UndeployPlayer(player);
+                }
+            } catch {
+                // Player might be invalid
+            }
+        }
+
+        // Freeze all alive players (input restrictions for humans)
+        if (alivePlayers.length > 0) {
+            countdownUI?.freezeAllPlayers(alivePlayers);
+        }
+
+        // Hide health bars, elimination UI, and flag capture
+        countdownUI?.stop();
+        hideEliminationEffect();
+        flagCaptureUI?.hide();
+
+        // Show draw or win/loss based on elimination state
+        if (isMutualElimination) {
+            showRoundDraw();
+        } else {
+            const winningTeam = team1Alive.length > 0 ? 1 : 2;
+            showRoundResults(winningTeam);
+            playRoundProgressVO(winningTeam);
+        }
+
+        // Check for match win IMMEDIATELY after score update (only if not a draw)
+        if (!isMutualElimination) {
+            const scores = getScores();
+            const matchWinScore = 6;
+            const isMatchWon = scores.team1 >= matchWinScore || scores.team2 >= matchWinScore;
+
+            if (isMatchWon) {
+                // Set flag immediately to prevent any new round from starting
+                matchEnding = true;
+
+                // Wait for result screen, then cleanup and end game
+                Timers.setTimeout(() => {
+                    const winningTeamObj = mod.GetTeam(scores.team1 >= matchWinScore ? 1 : 2);
+                    adminDebugTool?.dynamicLog(
+                        `Match over! Team ${scores.team1 >= matchWinScore ? 1 : 2} wins ${scores.team1}-${scores.team2}`
+                    );
+                    endMatchDeployed(winningTeamObj);
+                }, 3000);
+                return;
+            }
+        }
+
+        // Continue to next round after 5 seconds (only if match not won)
+        Timers.setTimeout(() => {
+            if (matchEnding) return; // Don't start new round if match is ending
+
+            // Calculate the next round number and swap sides if needed BEFORE teleporting
+            const nextRound = roundNumber + 1;
+            if (nextRound > 1 && (nextRound - 1) % 3 === 0) {
+                sidesSwapped = !sidesSwapped;
+                adminDebugTool?.dynamicLog(`Sides swapped before deploy! sidesSwapped=${sidesSwapped}`);
+                playVO(mod.VoiceOverEvents2D.RoundSwitchSides);
+            }
+
+            // No match win yet - deploy all, teleport, freeze, then start next round
+            deployAllAtStartPositions(() => {
+                // Freeze all players
+                const allPlayersNow = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+                countdownUI?.freezeAllPlayers(allPlayersNow);
+
+                // Start next round after brief delay
+                Timers.setTimeout(() => {
+                    resetRound();
+                }, 500);
+            });
+        }, 5000);
+    }
+}
+
+function deployAllAtStartPositions(callback: () => void): void {
+    // Don't deploy if match is ending
+    if (matchEnding) return;
+
+    // Set spawn mode, reconcile teams (rule 1 + backfill leavers next round), then deploy.
+    mod.SetSpawnMode(mod.SpawnModes.AutoSpawn);
+    reconcileTeams();
+    mod.DeployAllPlayers();
+
+    // Wait for players to deploy, then call callback
+    // Note: Teleporting is handled by countdownUI.start() which assigns positions
+    Timers.setTimeout(() => {
+        callback();
+    }, 500);
+}
+
+function handlePlayerDeath(eventPlayer: mod.Player): void {
+    // Don't process during round reset or if round hasn't started
+    if (resettingRound || !roundStarted) {
+        logMain('handlePlayerDeath SKIPPED - resetting or not started', { resettingRound, roundStarted });
+        return;
+    }
+    if (countdownUI?.isRunning) {
+        logMain('handlePlayerDeath SKIPPED - countdown running');
+        return;
+    }
+    if (roundEnding) {
+        logMain('handlePlayerDeath SKIPPED - round already ending');
+        return;
+    }
+
+    // Validate dead player reference before accessing
+    let playerId = -1;
+    let deadTeamId = -1;
+    try {
+        if (!mod.IsPlayerValid(eventPlayer)) {
+            // Player reference invalid - still show elimination effect
+            showEliminationEffect();
+            checkRoundEnd();
+            return;
+        }
+        playerId = mod.GetObjId(eventPlayer);
+        const deadPlayerTeam = mod.GetTeam(eventPlayer);
+        deadTeamId = mod.GetObjId(deadPlayerTeam);
+    } catch {
+        // Failed to get dead player info - still show elimination
+        showEliminationEffect();
+        checkRoundEnd();
+        return;
+    }
+
+    adminDebugTool?.dynamicLog(`Player ${playerId} died`);
+
+    // Play death sounds to all players
+    try {
+        const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+
+        for (const p of allPlayers) {
+            try {
+                if (!mod.IsPlayerValid(p)) continue;
+                if (mod.GetSoldierState(p, mod.SoldierStateBool.IsAISoldier)) continue;
+                if (mod.GetObjId(p) === playerId) continue; // Skip the dead player
+
+                const playerTeam = mod.GetTeam(p);
+                const isTeammate = mod.GetObjId(playerTeam) === deadTeamId;
+
+                // Play friendly death to teammates, enemy death to enemies
+                playSound(p, isTeammate ? SOUNDS.FRIENDLY_DEATH : SOUNDS.ENEMY_DEATH);
+            } catch {}
+        }
+    } catch {}
+
+    // Show elimination effect (X v Y) - returns true if this is final elimination
+    const isFinalElimination = showEliminationEffect();
+
+    if (isFinalElimination) {
+        // Delay round end check to allow final elimination animation to play
+        // Animation takes ~1600ms (shrink 200 + delay 300 + hold 800 + fade 300)
+        Timers.setTimeout(() => {
+            checkRoundEnd();
+        }, 1600);
+    } else {
+        // Check round end immediately for non-final eliminations
+        checkRoundEnd();
+    }
+}
+
+// Check for round end when a player dies or is downed
+Events.OnPlayerDied.subscribe((eventPlayer: mod.Player) => {
+    _playerDeaths++;
+    const playerId = mod.GetObjId(eventPlayer);
+    logMain('OnPlayerDied', { playerId, totalDeaths: _playerDeaths });
+    adminDebugTool?.dynamicLog('OnPlayerDied event fired');
+    handlePlayerDeath(eventPlayer);
+
+    // Reset bot brain on death (clear memory for respawn)
+    if (mod.GetSoldierState(eventPlayer, mod.SoldierStateBool.IsAISoldier)) {
+        resetBotBrain(eventPlayer);
+    }
+
+    // Force deploy then undeploy after 2 seconds to kick out of spectator mode
+    Timers.setTimeout(() => {
+        try {
+            if (mod.IsPlayerValid(eventPlayer)) {
+                mod.DeployPlayer(eventPlayer);
+                mod.UndeployPlayer(eventPlayer);
+            }
+        } catch {}
+    }, 2000);
+});
+
+Events.OnMandown.subscribe((eventPlayer: mod.Player) => {
+    adminDebugTool?.dynamicLog('OnMandown event fired');
+    handlePlayerDeath(eventPlayer);
+
+    // Force deploy then undeploy after 2 seconds to kick out of spectator mode
+    Timers.setTimeout(() => {
+        try {
+            if (mod.IsPlayerValid(eventPlayer)) {
+                mod.DeployPlayer(eventPlayer);
+                mod.UndeployPlayer(eventPlayer);
+            }
+        } catch {}
+    }, 2000);
+});
+
+// Helper to get stats for a player (bot or human)
+function getStatsForPlayer(player: mod.Player): PlayerStats {
+    const botIdentity = getBotIdentityByPlayerId(mod.GetObjId(player));
+    if (botIdentity) {
+        return botIdentity.stats;
+    }
+    return getPlayerStats(player);
+}
+
+// Track kills for scoreboard and round end
+Events.OnPlayerEarnedKill.subscribe((killer: mod.Player, victim: mod.Player) => {
+    lastKiller = killer;
+    adminDebugTool?.dynamicLog(`Last killer set to player ${mod.GetObjId(killer)}`);
+
+    // Update scoreboard stats (uses bot persistent stats for bots)
+    const killerStats = getStatsForPlayer(killer);
+    killerStats.kills++;
+    updateScoreboard(killer);
+
+    const victimStats = getStatsForPlayer(victim);
+    victimStats.deaths++;
+    updateScoreboard(victim);
+});
+
+// ============================================================================
+// DAMAGE & ASSIST TRACKING SYSTEM
+// ============================================================================
+// Tracks damage dealt to each player and awards assists on kill
+// Damage is capped to actual health remaining (no overkill counting)
+// ============================================================================
+
+// Track current health of each player
+const playerHealth: Map<number, number> = new Map();
+
+// Track damage contributors for each victim: victimId -> Map<attackerId, totalDamage>
+const damageContributors: Map<number, Map<number, number>> = new Map();
+
+// Track player objects by ID for assist attribution
+const playerObjects: Map<number, mod.Player> = new Map();
+
+// Initialize health tracking when player deploys
+Events.OnPlayerDeployed.subscribe((player: mod.Player) => {
+    try {
+        const playerId = mod.GetObjId(player);
+        const currentHealth = mod.GetSoldierState(player, mod.SoldierStateNumber.CurrentHealth);
+        playerHealth.set(playerId, currentHealth);
+        damageContributors.set(playerId, new Map());
+        playerObjects.set(playerId, player);
+
+        // Ensure player has stats entry
+        const stats = getStatsForPlayer(player);
+        adminDebugTool?.dynamicLog(`Deploy: Player ${playerId} health=${currentHealth}, dmg=${stats.damage}`);
+    } catch {}
+});
+
+// Track damage for scoreboard - accumulate damage per attacker
+Events.OnPlayerDamaged.subscribe((victim: mod.Player, attacker: mod.Player) => {
+    try {
+        const attackerId = mod.GetObjId(attacker);
+        const victimId = mod.GetObjId(victim);
+
+        // Don't track self-damage
+        if (attackerId === victimId) return;
+
+        // Check if this is friendly fire (same team) - don't track
+        try {
+            const attackerTeam = mod.GetTeam(attacker);
+            const victimTeam = mod.GetTeam(victim);
+            if (mod.GetObjId(attackerTeam) === mod.GetObjId(victimTeam)) return;
+        } catch {}
+
+        // Notify bot brain of damage (triggers battle state)
+        // If victim is a bot, it now knows it's under attack AND targets the attacker
+        if (mod.GetSoldierState(victim, mod.SoldierStateBool.IsAISoldier)) {
+            try {
+                const attackerPos = mod.GetSoldierState(attacker, mod.SoldierStateVector.GetPosition);
+                const brain = getBotBrain(victim);
+                brain.onDamaged(attacker, attackerPos);
+
+                // IMMEDIATELY snap to the attacker and open fire - trigger-happy retaliation.
+                mod.AISetTarget(victim, attacker);
+                mod.AIEnableShooting(victim, true);
+                mod.AIEnableTargeting(victim, true);
+                mod.AIForceFire(victim, 2);
+                mod.AISetMoveSpeed(victim, mod.MoveSpeed.Run);
+
+                // Human panic reaction while returning fire: 50% jump-juke away, 10% drop prone,
+                // ~40% just keep doing what they were (still shooting back at the attacker).
+                const react = Math.random();
+                if (react < 0.5) {
+                    mod.SetAiInput(victim, mod.AiInput.Jump, 0.3);
+                    mod.SetAiInput(victim, mod.AiInput.Strafe, 0.6);
+                } else if (react < 0.6) {
+                    mod.SetAiInput(victim, mod.AiInput.Prone, 1.5);
+                }
+
+                // Clear push target - we're in combat now
+                brain.clearPushTarget();
+            } catch {}
+        }
+
+        // Get tracked health before this damage (default 100)
+        const healthBefore = playerHealth.get(victimId) ?? 100;
+
+        // Read current health immediately - damage should already be applied
+        const healthAfter = mod.GetSoldierState(victim, mod.SoldierStateNumber.CurrentHealth);
+
+        // Calculate actual damage (capped to health they actually had)
+        const actualDamage = Math.max(0, healthBefore - healthAfter);
+
+        // Update health tracking IMMEDIATELY to prevent race conditions
+        playerHealth.set(victimId, Math.max(0, healthAfter));
+
+        if (actualDamage > 0) {
+            // Track this attacker's contribution to this victim
+            let contributors = damageContributors.get(victimId);
+            if (!contributors) {
+                contributors = new Map();
+                damageContributors.set(victimId, contributors);
+            }
+            const previousDamage = contributors.get(attackerId) ?? 0;
+            contributors.set(attackerId, previousDamage + actualDamage);
+
+            // Update attacker's damage stat
+            const stats = getStatsForPlayer(attacker);
+            stats.damage += Math.round(actualDamage);
+            updateScoreboard(attacker);
+
+            adminDebugTool?.dynamicLog(
+                `DMG: Player ${attackerId} dealt ${Math.round(actualDamage)} to ${victimId}. Total: ${stats.damage}`
+            );
+        }
+    } catch {}
+});
+
+// On kill, award assists to other players who damaged the victim
+Events.OnPlayerEarnedKill.subscribe((killer: mod.Player, victim: mod.Player) => {
+    try {
+        const killerId = mod.GetObjId(killer);
+        const victimId = mod.GetObjId(victim);
+
+        // Get all damage contributors for this victim
+        const contributors = damageContributors.get(victimId);
+        if (contributors) {
+            // Award assists to anyone who damaged the victim (except the killer)
+            for (const [attackerId, _damage] of contributors) {
+                if (attackerId !== killerId) {
+                    // Find the player object for this attacker
+                    const assisterPlayer = playerObjects.get(attackerId);
+                    if (assisterPlayer) {
+                        const stats = getStatsForPlayer(assisterPlayer);
+                        stats.assists++;
+                        updateScoreboard(assisterPlayer);
+                    }
+                }
+            }
+            // Clear damage tracking for this victim
+            contributors.clear();
+        }
+
+        // Reset victim's health tracking for next spawn
+        playerHealth.delete(victimId);
+    } catch {}
+});
+
+// Clean up tracking on undeploy
+Events.OnPlayerUndeploy.subscribe((player: mod.Player) => {
+    try {
+        const playerId = mod.GetObjId(player);
+        playerHealth.delete(playerId);
+        damageContributors.delete(playerId);
+        // Don't delete from playerObjects - we need it for assist attribution
+    } catch {}
+});
+
+// Track bot undeployment to deactivate identities
+Events.OnPlayerUndeploy.subscribe((player: mod.Player) => {
+    try {
+        const playerId = mod.GetObjId(player);
+        // Check if this is a bot with an identity
+        const identity = getBotIdentityByPlayerId(playerId);
+        if (identity) {
+            deactivateBotIdentity(playerId);
+        }
+    } catch {}
+});
+
+// ============================================================================
+// DEATH ZONE AREA TRIGGERS (IDs 10-20)
+// ============================================================================
+// Players entering these area triggers are killed instantly
+// ============================================================================
+
+// Configure which area trigger IDs are death zones (10-20)
+const DEATH_ZONE_START_ID = 10;
+const DEATH_ZONE_END_ID = 20;
+
+// Kill players who enter death zone triggers
+Events.OnPlayerEnterAreaTrigger.subscribe((player: mod.Player, trigger: mod.AreaTrigger) => {
+    const triggerId = mod.GetObjId(trigger);
+    // Check if this trigger ID is in our death zone range
+    if (triggerId >= DEATH_ZONE_START_ID && triggerId <= DEATH_ZONE_END_ID) {
+        mod.Kill(player);
+    }
+});
 
 // Event subscriptions for the admin debug tool.
 Events.OnPlayerJoinGame.subscribe(createAdminDebugTool);
 Events.OnPlayerDeployed.subscribe(showTelemetry);
 Events.OnPlayerUndeploy.subscribe(stopTelemetry);
 Events.OnPlayerLeaveGame.subscribe(destroyAdminDebugTool);
+
+// Play leave sound when a human player leaves (not bots)
+Events.OnPlayerLeaveGame.subscribe((playerId: number) => {
+    // Skip sound for bots
+    if (knownBotIds.has(playerId)) {
+        knownBotIds.delete(playerId); // Clean up tracking
+        return;
+    }
+
+    const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+    for (const p of allPlayers) {
+        try {
+            if (mod.IsPlayerValid(p) && !mod.GetSoldierState(p, mod.SoldierStateBool.IsAISoldier)) {
+                playSound(p, SOUNDS.PLAYER_LEAVE);
+            }
+        } catch {}
+    }
+});
 
 // Event subscriptions for notifying players of their name and the current map.
 Events.OnPlayerDeployed.subscribe(handlePlayerDeployed);
