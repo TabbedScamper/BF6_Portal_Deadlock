@@ -133,46 +133,6 @@ let side2SpawnPositions: mod.Vector[] = [];
 let spawnPositionsInitialized = false;
 let sidesSwapped = false;
 
-// Track used spawn positions per team (reset each round)
-let team1SpawnIndex = 0;
-let team2SpawnIndex = 0;
-
-// Track players already teleported this round (prevents double-teleport)
-let teleportedThisRound: Set<number> = new Set();
-
-// Get next spawn position for a team (sequential assignment)
-function getNextSpawnPosition(teamId: number): mod.Vector | null {
-    const positions =
-        teamId === 1
-            ? sidesSwapped
-                ? side2SpawnPositions
-                : side1SpawnPositions
-            : sidesSwapped
-              ? side1SpawnPositions
-              : side2SpawnPositions;
-
-    if (positions.length === 0) return null;
-
-    const index = teamId === 1 ? team1SpawnIndex : team2SpawnIndex;
-    const pos = positions[index % positions.length];
-
-    // Increment index for next player
-    if (teamId === 1) {
-        team1SpawnIndex++;
-    } else {
-        team2SpawnIndex++;
-    }
-
-    return pos;
-}
-
-// Reset spawn indices (call at round start)
-function resetSpawnIndices(): void {
-    team1SpawnIndex = 0;
-    team2SpawnIndex = 0;
-    teleportedThisRound.clear();
-}
-
 // Offset distance for additional spawn points (meters)
 const SPAWN_OFFSET_DISTANCE = 1.0;
 
@@ -1195,16 +1155,96 @@ function enterRoundTransition(): void {
     } catch {}
 }
 
+
+// Shared round teardown — the formerly hand-copied tail of all three round enders
+// (flag capture / time-out / elimination). One copy = no more drift between variants.
+// Caller must have set roundEnding = true and called enterRoundTransition() first.
+function finishRound(isDraw: boolean, winningTeam: number, showResult: () => void): void {
+    // Stop bot targeting when round ends
+    if (ENABLE_CUSTOM_BOTS) {
+        stopBotTargeting();
+    }
+
+    // Undeploy dead players; heal, disarm and idle alive players
+    const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+    const alivePlayers: mod.Player[] = [];
+    for (const player of allPlayers) {
+        try {
+            const isAlive = mod.GetSoldierState(player, mod.SoldierStateBool.IsAlive);
+            if (isAlive) {
+                mod.Heal(player, 1000);
+                removeAllEquipment(player);
+                if (mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) {
+                    mod.AIIdleBehavior(player);
+                    mod.AIEnableShooting(player, false);
+                    mod.AIEnableTargeting(player, false);
+                }
+                alivePlayers.push(player);
+            } else {
+                mod.UndeployPlayer(player);
+            }
+        } catch {}
+    }
+
+    // Freeze all alive players (input restrictions for humans)
+    if (alivePlayers.length > 0) {
+        countdownUI?.freezeAllPlayers(alivePlayers);
+    }
+
+    // Hide round UI, show the result, play progress VO
+    countdownUI?.stop();
+    hideEliminationEffect();
+    flagCaptureUI?.hide();
+    showResult();
+    if (!isDraw) {
+        playRoundProgressVO(winningTeam);
+    }
+
+    // Match-win check IMMEDIATELY after score update (draws never end the match)
+    if (!isDraw) {
+        const scores = getScores();
+        const matchWinScore = 6;
+        const isMatchWon = scores.team1 >= matchWinScore || scores.team2 >= matchWinScore;
+        if (isMatchWon) {
+            // Set flag immediately to prevent any new round from starting
+            matchEnding = true;
+            // Wait for result screen, then cleanup and end game
+            Timers.setTimeout(() => {
+                const winningTeamObj = mod.GetTeam(scores.team1 >= matchWinScore ? 1 : 2);
+                adminDebugTool?.dynamicLog(
+                    `Match over! Team ${scores.team1 >= matchWinScore ? 1 : 2} wins ${scores.team1}-${scores.team2}`
+                );
+                endMatchDeployed(winningTeamObj);
+            }, 3000);
+            return;
+        }
+    }
+
+    // Continue to next round after 5 seconds (only if match not won)
+    Timers.setTimeout(() => {
+        if (matchEnding) return;
+        // Swap sides if needed BEFORE deployment so teleport uses correct positions
+        const nextRound = roundNumber + 1;
+        if (nextRound > 1 && (nextRound - 1) % 3 === 0) {
+            sidesSwapped = !sidesSwapped;
+            adminDebugTool?.dynamicLog(`Sides swapped before deploy! sidesSwapped=${sidesSwapped}`);
+            playVO(mod.VoiceOverEvents2D.RoundSwitchSides);
+        }
+        deployAllAtStartPositions(() => {
+            const allPlayersNow = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+            countdownUI?.freezeAllPlayers(allPlayersNow);
+            Timers.setTimeout(() => {
+                resetRound();
+            }, 500);
+        });
+    }, 5000);
+}
+
 // Flag capture callbacks
 function handleFlagCapture(teamId: number): void {
     if (roundEnding) return;
     roundEnding = true;
     enterRoundTransition();
-
-    // Stop bot targeting when round ends
-    if (ENABLE_CUSTOM_BOTS) {
-        stopBotTargeting();
-    }
 
     adminDebugTool?.dynamicLog(`Team ${teamId} captured the flag!`);
 
@@ -1229,81 +1269,8 @@ function handleFlagCapture(teamId: number): void {
     // Hide flag UI
     flagCaptureUI?.hide();
 
-    // Get all players for cleanup
-    const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
-    const alivePlayers: mod.Player[] = [];
-
-    for (const player of allPlayers) {
-        try {
-            const isAlive = mod.GetSoldierState(player, mod.SoldierStateBool.IsAlive);
-            if (isAlive) {
-                mod.Heal(player, 1000);
-                // Remove equipment
-                removeAllEquipment(player);
-                // Make bots idle with no target
-                if (mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) {
-                    mod.AIIdleBehavior(player);
-                    mod.AIEnableShooting(player, false);
-                    mod.AIEnableTargeting(player, false);
-                }
-                alivePlayers.push(player);
-            } else {
-                mod.UndeployPlayer(player);
-            }
-        } catch {}
-    }
-
-    // Freeze players
-    if (alivePlayers.length > 0) {
-        countdownUI?.freezeAllPlayers(alivePlayers);
-    }
-
-    // Hide UI and show results
-    countdownUI?.stop();
-    hideEliminationEffect();
-    showRoundResults(teamId, 5000, true); // isFlagCapture = true for objective captured/lost
-    playRoundProgressVO(teamId);
-
-    // Check for match win IMMEDIATELY after score update
-    const scores = getScores();
-    const matchWinScore = 6;
-    const isMatchWon = scores.team1 >= matchWinScore || scores.team2 >= matchWinScore;
-
-    if (isMatchWon) {
-        // Set flag immediately to prevent any new round from starting
-        matchEnding = true;
-
-        // Wait for result screen (3 seconds), then cleanup and end game
-        Timers.setTimeout(() => {
-            const winningTeamObj = mod.GetTeam(scores.team1 >= matchWinScore ? 1 : 2);
-            adminDebugTool?.dynamicLog(
-                `Match over! Team ${scores.team1 >= matchWinScore ? 1 : 2} wins ${scores.team1}-${scores.team2}`
-            );
-            endMatchDeployed(winningTeamObj);
-        }, 3000);
-        return;
-    }
-
-    // Continue to next round after 5 seconds (only if match not won)
-    Timers.setTimeout(() => {
-        if (matchEnding) return; // Don't start new round if match is ending
-
-        const nextRound = roundNumber + 1;
-        if (nextRound > 1 && (nextRound - 1) % 3 === 0) {
-            sidesSwapped = !sidesSwapped;
-            adminDebugTool?.dynamicLog(`Sides swapped before deploy! sidesSwapped=${sidesSwapped}`);
-            playVO(mod.VoiceOverEvents2D.RoundSwitchSides);
-        }
-
-        deployAllAtStartPositions(() => {
-            const allPlayersNow = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
-            countdownUI?.freezeAllPlayers(allPlayersNow);
-
-            Timers.setTimeout(() => {
-                resetRound();
-            }, 500);
-        });
-    }, 5000);
+    // Shared teardown; isFlagCapture = true for objective captured/lost result screen
+    finishRound(false, teamId, () => showRoundResults(teamId, 5000, true));
 }
 
 function handlePauseCountdown(): void {
@@ -1539,56 +1506,9 @@ function handlePlayerDeployed(player: mod.Player): void {
 
     const playerId = mod.GetObjId(player);
 
-    // During round reset, teleport player to correct side
-    if (resettingRound) {
-        // Skip if player was already teleported this round (prevents double-teleport)
-        if (teleportedThisRound.has(playerId)) {
-            return;
-        }
-
-        // Ensure spawn positions are initialized
-        initSpawnPositions();
-
-        // Teleport player to correct position based on side swap
-        // Uses sequential position assignment to avoid overlapping spawns
-        try {
-            const playerTeam = mod.GetTeam(player);
-            const team1 = mod.GetTeam(1);
-            const isTeam1 = mod.GetObjId(playerTeam) === mod.GetObjId(team1);
-            const teamId = isTeam1 ? 1 : 2;
-
-            // Get next available spawn position for this team
-            const pos = getNextSpawnPosition(teamId);
-
-            if (pos) {
-                // Mark as teleported before teleporting
-                teleportedThisRound.add(playerId);
-
-                // Calculate facing angle toward flag (in radians)
-                const flagPos = flagCaptureUI?.getFlagPosition();
-                let facingAngle = 0;
-                if (flagPos) {
-                    const dx = mod.XComponentOf(flagPos) - mod.XComponentOf(pos);
-                    const dz = mod.ZComponentOf(flagPos) - mod.ZComponentOf(pos);
-                    facingAngle = Math.atan2(dx, dz);
-                }
-                mod.Teleport(player, pos, facingAngle);
-                // Teleport again after short delay to ensure facing direction sticks
-                Timers.setTimeout(() => {
-                    try {
-                        if (mod.IsPlayerValid(player)) {
-                            mod.Teleport(player, pos, facingAngle);
-                        }
-                    } catch {}
-                }, 100);
-                adminDebugTool?.dynamicLog(`Teleported player ${playerId} to team ${teamId} spawn position`);
-            }
-        } catch {
-            // Player might be invalid
-        }
-
-        return;
-    }
+    // NOTE: a former `resettingRound` teleport branch lived here — dead code (resetRound()
+    // is fully synchronous, so no deploy event can ever observe resettingRound === true;
+    // round-start teleporting is owned by countdownUI.start()). Removed 2026-07-17.
 
     // Block spawns during active round (after countdown ends).
     // NOT during the round transition (roundEnding) — that's the legit redeploy of everyone for
@@ -1684,8 +1604,16 @@ function startRound(): void {
     // Initialize spawn positions from spatial objects
     initSpawnPositions();
 
-    // Reset spawn indices for sequential position assignment
-    resetSpawnIndices();
+    // STAT-TRACKING FIX: survivors never redeploy, so their damage-tracking state persisted
+    // across rounds — first-hit damage was swallowed (stale healthBefore) and stale assist
+    // contributors could leak into next-round kills. Reset both for the new round; players
+    // who deploy fresh get seeded by the OnPlayerDeployed tracker as before.
+    damageContributors.clear();
+    for (const p of [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)]) {
+        try {
+            playerHealth.set(mod.GetObjId(p), 100);
+        } catch {}
+    }
 
     // Spawn backfill bots to fill empty slots
     if (ENABLE_CUSTOM_BOTS) {
@@ -1804,103 +1732,26 @@ function handleRoundTimeEnd(): void {
 
     adminDebugTool?.dynamicLog(`Time up! Team1 health: ${team1Health}, Team2 health: ${team2Health}`);
 
-    // Check for tied health (round draw)
-    const isHealthTied = team1Health === team2Health;
+    // Check for tied health (round draw). Epsilon absorbs float noise from summing
+    // NormalizedHealth*100 — exact-equality could miss a true tie by 1e-13.
+    const isHealthTied = Math.abs(team1Health - team2Health) < 0.01;
 
     // Trigger round end
     roundEnding = true;
     enterRoundTransition();
 
-    // Undeploy dead players, heal and freeze alive players
-    const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
-    const alivePlayers: mod.Player[] = [];
-
-    for (const player of allPlayers) {
-        try {
-            const isAlive = mod.GetSoldierState(player, mod.SoldierStateBool.IsAlive);
-
-            if (isAlive) {
-                mod.Heal(player, 1000);
-                // Remove all equipment except primary and secondary
-                removeAllEquipment(player);
-                // Make bots idle with no target
-                if (mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) {
-                    mod.AIIdleBehavior(player);
-                    mod.AIEnableShooting(player, false);
-                    mod.AIEnableTargeting(player, false);
-                }
-                alivePlayers.push(player);
-            } else {
-                mod.UndeployPlayer(player);
-            }
-        } catch {
-            // Player invalid
-        }
-    }
-
-    // Freeze all alive players (input restrictions for humans)
-    if (alivePlayers.length > 0) {
-        countdownUI?.freezeAllPlayers(alivePlayers);
-    }
-
-    countdownUI?.stop();
-    hideEliminationEffect();
-    flagCaptureUI?.hide();
-
-    // Show draw or win/loss based on health comparison
     if (isHealthTied) {
         adminDebugTool?.dynamicLog('Health tied - round draw!');
-        showRoundDraw();
-    } else {
-        const winningTeam = team1Health > team2Health ? 1 : 2;
-        // Health-based win (timer ran out) - pass isHealthWin: true
-        showRoundResults(winningTeam, 5000, false, true);
-        playRoundProgressVO(winningTeam);
     }
-
-    // Check for match win IMMEDIATELY after score update (only if not a draw)
-    if (!isHealthTied) {
-        const scores = getScores();
-        const matchWinScore = 6;
-        const isMatchWon = scores.team1 >= matchWinScore || scores.team2 >= matchWinScore;
-
-        if (isMatchWon) {
-            // Set flag immediately to prevent any new round from starting
-            matchEnding = true;
-
-            // Wait for result screen (3 seconds), then cleanup and end game
-            Timers.setTimeout(() => {
-                const winningTeamObj = mod.GetTeam(scores.team1 >= matchWinScore ? 1 : 2);
-                adminDebugTool?.dynamicLog(
-                    `Match over! Team ${scores.team1 >= matchWinScore ? 1 : 2} wins ${scores.team1}-${scores.team2}`
-                );
-                endMatchDeployed(winningTeamObj);
-            }, 3000);
-            return;
+    const healthWinner = team1Health > team2Health ? 1 : 2;
+    // Shared teardown; health-based win (timer ran out) passes isHealthWin: true
+    finishRound(isHealthTied, healthWinner, () => {
+        if (isHealthTied) {
+            showRoundDraw();
+        } else {
+            showRoundResults(healthWinner, 5000, false, true);
         }
-    }
-
-    // Continue to next round after 5 seconds (only if match not won)
-    Timers.setTimeout(() => {
-        if (matchEnding) return; // Don't start new round if match is ending
-
-        // Calculate the next round number and swap sides if needed BEFORE teleporting
-        const nextRound = roundNumber + 1;
-        if (nextRound > 1 && (nextRound - 1) % 3 === 0) {
-            sidesSwapped = !sidesSwapped;
-            adminDebugTool?.dynamicLog(`Sides swapped before deploy! sidesSwapped=${sidesSwapped}`);
-            playVO(mod.VoiceOverEvents2D.RoundSwitchSides);
-        }
-
-        deployAllAtStartPositions(() => {
-            const allPlayersNow = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
-            countdownUI?.freezeAllPlayers(allPlayersNow);
-
-            Timers.setTimeout(() => {
-                resetRound();
-            }, 500);
-        });
-    }, 5000);
+    });
 }
 
 function resetRound(): void {
@@ -1912,9 +1763,6 @@ function resetRound(): void {
 
     // Prevent handlePlayerDeployed from interfering during reset
     resettingRound = true;
-
-    // Reset spawn position indices for new round (ensures sequential assignment)
-    resetSpawnIndices();
 
     // Stop the countdown UI (hides team health, etc.)
     countdownUI?.stop();
@@ -1975,11 +1823,6 @@ function checkRoundEnd(): void {
         roundEnding = true;
         enterRoundTransition();
 
-        // Stop bot targeting when round ends
-        if (ENABLE_CUSTOM_BOTS) {
-            stopBotTargeting();
-        }
-
         // Check for mutual elimination (both teams wiped out at the same time)
         const isMutualElimination = team1Alive.length === 0 && team2Alive.length === 0;
 
@@ -1990,100 +1833,15 @@ function checkRoundEnd(): void {
             adminDebugTool?.dynamicLog(`Team ${winningTeam} wins the round!`);
         }
 
-        // Undeploy dead players, heal and freeze alive players
-        const allPlayers = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
-        const alivePlayers: mod.Player[] = [];
-
-        for (const player of allPlayers) {
-            try {
-                const isAlive = mod.GetSoldierState(player, mod.SoldierStateBool.IsAlive);
-
-                if (isAlive) {
-                    // Heal to 100
-                    mod.Heal(player, 1000);
-                    // Remove all equipment except primary and secondary
-                    removeAllEquipment(player);
-                    // Make bots idle with no target
-                    if (mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) {
-                        mod.AIIdleBehavior(player);
-                        mod.AIEnableShooting(player, false);
-                        mod.AIEnableTargeting(player, false);
-                    }
-                    alivePlayers.push(player);
-                } else {
-                    // Undeploy dead players
-                    mod.UndeployPlayer(player);
-                }
-            } catch {
-                // Player might be invalid
+        // Shared teardown; mutual elimination = draw
+        const elimWinner = team1Alive.length > 0 ? 1 : 2;
+        finishRound(isMutualElimination, elimWinner, () => {
+            if (isMutualElimination) {
+                showRoundDraw();
+            } else {
+                showRoundResults(elimWinner);
             }
-        }
-
-        // Freeze all alive players (input restrictions for humans)
-        if (alivePlayers.length > 0) {
-            countdownUI?.freezeAllPlayers(alivePlayers);
-        }
-
-        // Hide health bars, elimination UI, and flag capture
-        countdownUI?.stop();
-        hideEliminationEffect();
-        flagCaptureUI?.hide();
-
-        // Show draw or win/loss based on elimination state
-        if (isMutualElimination) {
-            showRoundDraw();
-        } else {
-            const winningTeam = team1Alive.length > 0 ? 1 : 2;
-            showRoundResults(winningTeam);
-            playRoundProgressVO(winningTeam);
-        }
-
-        // Check for match win IMMEDIATELY after score update (only if not a draw)
-        if (!isMutualElimination) {
-            const scores = getScores();
-            const matchWinScore = 6;
-            const isMatchWon = scores.team1 >= matchWinScore || scores.team2 >= matchWinScore;
-
-            if (isMatchWon) {
-                // Set flag immediately to prevent any new round from starting
-                matchEnding = true;
-
-                // Wait for result screen, then cleanup and end game
-                Timers.setTimeout(() => {
-                    const winningTeamObj = mod.GetTeam(scores.team1 >= matchWinScore ? 1 : 2);
-                    adminDebugTool?.dynamicLog(
-                        `Match over! Team ${scores.team1 >= matchWinScore ? 1 : 2} wins ${scores.team1}-${scores.team2}`
-                    );
-                    endMatchDeployed(winningTeamObj);
-                }, 3000);
-                return;
-            }
-        }
-
-        // Continue to next round after 5 seconds (only if match not won)
-        Timers.setTimeout(() => {
-            if (matchEnding) return; // Don't start new round if match is ending
-
-            // Calculate the next round number and swap sides if needed BEFORE teleporting
-            const nextRound = roundNumber + 1;
-            if (nextRound > 1 && (nextRound - 1) % 3 === 0) {
-                sidesSwapped = !sidesSwapped;
-                adminDebugTool?.dynamicLog(`Sides swapped before deploy! sidesSwapped=${sidesSwapped}`);
-                playVO(mod.VoiceOverEvents2D.RoundSwitchSides);
-            }
-
-            // No match win yet - deploy all, teleport, freeze, then start next round
-            deployAllAtStartPositions(() => {
-                // Freeze all players
-                const allPlayersNow = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
-                countdownUI?.freezeAllPlayers(allPlayersNow);
-
-                // Start next round after brief delay
-                Timers.setTimeout(() => {
-                    resetRound();
-                }, 500);
-            });
-        }, 5000);
+        });
     }
 }
 

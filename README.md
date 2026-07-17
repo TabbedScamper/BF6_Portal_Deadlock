@@ -55,6 +55,26 @@ Telemetry to watch in PortalLog (`[EVT] team.reconcile`, `[EVT] team.moveHuman`)
 3. Does human `SetTeam` land reliably at match/round start?
 4. Do bot backfill counts come out right as humans join/leave?
 
+## Playtest checklist — 2026-07-17 fixes
+
+**Spectator wedge ("waiting for soldier deployment") fix:**
+1. Die with teammates alive → spectate a TEAMMATE (never the enemy while the round is live).
+2. Your last teammate dies (round over) → spectate falls through to a frozen winner behind the
+   result overlay — NO "waiting for soldier deployment", NO deploy screen, NO cursor-lock.
+3. New round: everyone force-deploys, teleported + frozen into the countdown; spectate back to team-only.
+4. Mutual wipe (grenade trade in 1v1 is the easy repro) → both respawn frozen, round result shows, next round proceeds.
+5. Play several full matches — the cursor-locked "UI mode" state should never appear.
+   PortalLog markers: `Round transition: spectate pool widened` / `mutual wipe -> force redeploy`.
+
+**Stat-tracking fix (survivor carry-over):**
+6. Survive a round with partial HP; next round, your FIRST hit on an enemy should register damage
+   on the scoreboard (previously swallowed) and assists should never come from last round's damage.
+
+**Round-teardown consolidation (behavior should be IDENTICAL):**
+7. All three round endings look/sound unchanged: elimination result, time-out health-win result
+   (isHealthWin), flag-capture result, draws (tied health + mutual wipe), side swaps every 3
+   rounds, match end at 6 wins.
+
 ## Repo notes
 
 - Repo: [TabbedScamper/BF6_Portal_Deadlock](https://github.com/TabbedScamper/BF6_Portal_Deadlock) (`origin`); deluca's template kept as the `template` remote for pulling template updates.
