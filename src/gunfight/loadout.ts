@@ -898,6 +898,79 @@ const SIGNATURE_LOADOUTS: SignatureLoadout[] = [
         throwable: G.Throwable_Stun_Grenade,
         throwableName: SK.throwables.stun,
     },
+    // -------- PISTOL-ONLY kits (primary: null -> apply strips the primary; knife stays) --------
+    {
+        // HIGH NOON — six rounds, one street, no witnesses. Draw.
+        primary: null,
+        primaryName: SK.throwables.none,
+        secondary: W.Sidearm_M44,
+        secondaryAttachments: [A.Scope_Iron_Sights, A.Barrel_675_Factory, A.Ammo_Match_Grade],
+        secondaryName: SK.custom.highnoon,
+        gadget: G.Class_Adrenaline_Injector,
+        gadgetName: SK.gadgets.stim,
+        throwable: G.Throwable_Throwing_Knife,
+        throwableName: SK.throwables.throwing_knife,
+    },
+    {
+        // THE PENCIL — a suppressed P18 and terrible focus. Yeah... a pencil.
+        primary: null,
+        primaryName: SK.throwables.none,
+        secondary: W.Sidearm_P18,
+        secondaryAttachments: [A.Scope_R_MR_100x, A.Muzzle_CQB_Suppressor, A.Barrel_39_Pencil, A.Magazine_17rnd_Fast_Mag],
+        secondaryName: SK.custom.thepencil,
+        gadget: G.Class_Adrenaline_Injector,
+        gadgetName: SK.gadgets.stim,
+        throwable: G.Throwable_Flash_Grenade,
+        throwableName: SK.throwables.flash,
+    },
+    {
+        // BACKUP PLAN — the plan IS the backup. Claymore the door, tax the entry.
+        primary: null,
+        primaryName: SK.throwables.none,
+        secondary: W.Sidearm_GGH_22,
+        secondaryAttachments: [A.Scope_R_MR_100x, A.Muzzle_CQB_Suppressor, A.Barrel_114mm_Pencil, A.Magazine_15rnd_Fast_Mag],
+        secondaryName: SK.custom.backupplan,
+        gadget: G.Misc_Anti_Personnel_Mine,
+        gadgetName: SK.gadgets.claymore,
+        throwable: G.Throwable_Smoke_Grenade,
+        throwableName: SK.throwables.smoke,
+    },
+    {
+        // DOUBLE JEOPARDY — same defendant, eight more charges, moon-clip reloads.
+        primary: null,
+        primaryName: SK.throwables.none,
+        secondary: W.Sidearm_M357_Trait,
+        secondaryAttachments: [A.Scope_Iron_Sights, A.Barrel_5_Pencil, A.Magazine_8rnd_Moon_Clip, A.Ammo_Hollow_Point],
+        secondaryName: SK.custom.doublejeopardy,
+        gadget: G.Class_Adrenaline_Injector,
+        gadgetName: SK.gadgets.stim,
+        throwable: G.Throwable_Mini_Frag_Grenade,
+        throwableName: SK.throwables.mini_frag,
+    },
+    {
+        // SPACE PROGRAM — the space gun, drone recon, and one small stun for mankind.
+        primary: null,
+        primaryName: SK.throwables.none,
+        secondary: W.Sidearm_ES_57,
+        secondaryAttachments: [A.Scope_RO_S_125x, A.Muzzle_CQB_Suppressor, A.Barrel_122mm_Pencil, A.Magazine_20rnd_Fast_Mag],
+        secondaryName: SK.custom.spaceprogram,
+        gadget: G.Deployable_Recon_Drone,
+        gadgetName: SK.gadgets.recon_drone,
+        throwable: G.Throwable_Stun_Grenade,
+        throwableName: SK.throwables.stun,
+    },
+    {
+        // LAST RESORT — a .45, a tracer, and a fire. Checkout is at noon.
+        primary: null,
+        primaryName: SK.throwables.none,
+        secondary: W.Sidearm_M45A1,
+        secondaryAttachments: [A.Scope_R_MR_100x, A.Muzzle_Single_port_Brake, A.Barrel_5_Pencil, A.Magazine_11rnd_Magazine],
+        secondaryName: SK.custom.lastresort,
+        gadget: G.Misc_Tracer_Dart,
+        gadgetName: SK.gadgets.tracer_dart,
+        throwable: G.Throwable_Incendiary_Grenade,
+        throwableName: SK.throwables.incendiary,
+    },
 ];
 let remainingSignatures: SignatureLoadout[] = [];
 
@@ -906,8 +979,9 @@ let remainingSignatures: SignatureLoadout[] = [];
 // Secondary, gadget, and throwable are always randomized
 // Custom secondaries always keep secondary even with launcher, stock secondaries removed with launcher
 export function getRandomLoadout(): Loadout {
-    // 15% — a SIGNATURE loadout: a full themed kit (fixed primary/secondary/gadget/throwable).
-    if (Math.random() < 0.15) {
+    // 18% — a SIGNATURE loadout: a full themed kit (fixed primary/secondary/gadget/throwable),
+    // including the pistol-only duels (primary: null).
+    if (Math.random() < 0.18) {
         const sig = pickFromBag(remainingSignatures, SIGNATURE_LOADOUTS);
         return {
             primary: sig.primary,

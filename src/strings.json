@@ -191,7 +191,13 @@
                 "lunchmoney": "LUNCH MONEY",
                 "courtroomdrama": "COURTROOM DRAMA",
                 "glitterpen": "GLITTER PEN",
-                "pizzarush": "PIZZA RUSH"
+                "pizzarush": "PIZZA RUSH",
+                "highnoon": "HIGH NOON",
+                "thepencil": "THE PENCIL",
+                "backupplan": "BACKUP PLAN",
+                "doublejeopardy": "DOUBLE JEOPARDY",
+                "spaceprogram": "SPACE PROGRAM",
+                "lastresort": "LAST RESORT"
             }
         }
     },
