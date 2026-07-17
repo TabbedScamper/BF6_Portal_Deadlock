@@ -1690,6 +1690,11 @@ function startRound(): void {
 
 // Called when countdown ends and players are unfrozen
 function handleCountdownEnd(): void {
+    // Seed the elimination "X v Y" baseline from the REAL round rosters (backfill bots are
+    // deployed by now; kills cannot happen before countdown end). Fixes the first-kill
+    // animation starting at a stale 4v4 in dynamically-sized rounds (e.g. 1v1 -> 1v0).
+    resetEliminationTracking();
+
     // Activate custom bots - set aggressive behavior and start targeting
     if (ENABLE_CUSTOM_BOTS) {
         activateBots();

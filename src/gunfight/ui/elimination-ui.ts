@@ -2,7 +2,6 @@ import { Timers } from 'bf6-portal-utils/timers/index.ts';
 import { UIContainer } from 'bf6-portal-utils/ui/components/container/index.ts';
 import { UIText } from 'bf6-portal-utils/ui/components/text/index.ts';
 import { getAlivePlayersOnTeam } from '../../helpers/index.ts';
-import { PLAYERS_PER_TEAM } from '../../config.ts';
 
 // ========== DEBUG LOGGING ==========
 const DEBUG_ELIMINATION = false;
@@ -40,10 +39,13 @@ const ELIM_VS_SIZE_END = 22;
 // Position (closer to health bars at top)
 const ELIM_POSITION_Y = -200;
 
-// Track active elimination UIs (one per player) and previous counts
+// Track active elimination UIs (one per player) and previous counts.
+// The prev counts are seeded from the REAL rosters via resetEliminationTracking() at
+// countdown end (kills cannot happen earlier), so the first kill of a 1v1 round animates
+// 1v1 -> 1v0 — not a hardcoded PLAYERS_PER_TEAM 4v4 (dynamic team sizing shrinks rounds).
 const activeUIs: Map<number, EliminationUI> = new Map();
-let prevTeam1Alive = PLAYERS_PER_TEAM;
-let prevTeam2Alive = PLAYERS_PER_TEAM;
+let prevTeam1Alive = 0;
+let prevTeam2Alive = 0;
 
 class EliminationUI {
     private _container: UIContainer;
@@ -129,22 +131,32 @@ class EliminationUI {
     }
 
     public async animate(): Promise<void> {
-        // Pop in with shrink effect (showing old numbers)
-        await this._animateShrinkIn();
+        // A rapid follow-up kill destroy()s this UI mid-animation (showEliminationEffect
+        // clears all active UIs). Guard after every await so a resumed continuation never
+        // writes to deleted widgets.
+        try {
+            // Pop in with shrink effect (showing old numbers)
+            await this._animateShrinkIn();
+            if (this._destroyed) return;
 
-        // Brief pause before transition
-        await this._wait(ELIM_TRANSITION_DELAY);
+            // Brief pause before transition
+            await this._wait(ELIM_TRANSITION_DELAY);
+            if (this._destroyed) return;
 
-        // Update to new numbers
-        this._leftNumber.message = mod.Message(mod.stringkeys.logger.chars[String(this._newLeftCount)]);
-        this._rightNumber.message = mod.Message(mod.stringkeys.logger.chars[String(this._newRightCount)]);
+            // Update to new numbers
+            this._leftNumber.message = mod.Message(mod.stringkeys.logger.chars[String(this._newLeftCount)]);
+            this._rightNumber.message = mod.Message(mod.stringkeys.logger.chars[String(this._newRightCount)]);
 
-        // Hold - shorter for final elimination
-        const holdDuration = this._isFinalElimination ? ELIM_FINAL_HOLD_DURATION : ELIM_HOLD_DURATION;
-        await this._wait(holdDuration);
+            // Hold - shorter for final elimination
+            const holdDuration = this._isFinalElimination ? ELIM_FINAL_HOLD_DURATION : ELIM_HOLD_DURATION;
+            await this._wait(holdDuration);
+            if (this._destroyed) return;
 
-        // Fade out
-        await this._animateFadeOut();
+            // Fade out
+            await this._animateFadeOut();
+        } catch {
+            // Widget deleted mid-step — nothing to clean beyond destroy() below
+        }
 
         // Clean up
         this.destroy();
@@ -219,14 +231,19 @@ class EliminationUI {
     }
 
     private _playerId: number = 0;
+    private _destroyed = false;
 
     public setPlayerId(playerId: number): void {
         this._playerId = playerId;
     }
 
     public destroy(): void {
+        if (this._destroyed) return;
+        this._destroyed = true;
         this._clearTimer();
-        this._container.delete();
+        try {
+            this._container.delete();
+        } catch {}
         if (this._playerId && activeUIs.get(this._playerId) === this) {
             activeUIs.delete(this._playerId);
         }
@@ -315,11 +332,14 @@ export function showEliminationEffect(): boolean {
 }
 
 /**
- * Reset elimination tracking (call at round start)
+ * Seed elimination tracking from the ACTUAL alive rosters. Call at countdown end (round
+ * live, backfill bots deployed) — and at round reset as an early approximation. This makes
+ * the first-kill animation start from the round's real size (1v1 -> 1v0), not a stale 4v4.
  */
 export function resetEliminationTracking(): void {
-    prevTeam1Alive = PLAYERS_PER_TEAM;
-    prevTeam2Alive = PLAYERS_PER_TEAM;
+    prevTeam1Alive = getAlivePlayersOnTeam(1).length;
+    prevTeam2Alive = getAlivePlayersOnTeam(2).length;
+    logElim('Elimination baseline seeded', { prevTeam1Alive, prevTeam2Alive });
 }
 
 /**
