@@ -18,6 +18,10 @@ export const BEHAVIOR_CONFIG = {
 
     // Push forward settings
     PUSH_ARRIVAL_DIST: 3.0, // Distance to consider "arrived" at push target
+    // --- OVERTIME ALL-IN (flag urgency >= SENSOR_CONFIG.FLAG_URGENCY_ALL_IN) ---
+    ALL_IN_FIGHT_RADIUS: 6.0, // Only a threat THIS close stops the run for the flag (else 15m)
+    ALL_IN_SPRINT_DIST: 8.0, // Beyond this range, sprint straight at the point
+    ALL_IN_REFEED_MS: 1000, // Re-issue the approach this often so a stale path can't park a bot
 };
 
 // Behavior weights (higher = higher priority)
@@ -35,7 +39,25 @@ export const DEFAULT_WEIGHTS: Partial<Record<keyof BotMemoryFields, number>> = {
     arrivedAtDest: 10, // Lowest: defend when arrived
 };
 
-export type BehaviorKind = 'battlefield' | 'defend' | 'moveto' | 'search' | 'flagpush' | 'flagengage' | 'push';
+// OVERTIME ALL-IN WEIGHTS — swapped in by the brain once flag urgency crosses
+// FLAG_URGENCY_ALL_IN. The only change that matters: the flag keys now outrank
+// visibleEnemy, so a bot that spots an enemy anywhere KEEPS RUNNING FOR THE POINT and
+// fights on the move, instead of stopping to duel while the clock runs out. Everything
+// below visibleEnemy is untouched (search/roam still work when there's no flag intent).
+export const OVERTIME_WEIGHTS: Partial<Record<keyof BotMemoryFields, number>> = {
+    enemyOnFlag: 200, // still the top priority: contest the capture itself
+    shouldPushFlag: 160, // > visibleEnemy: commit to the point
+    flagPos: 120, // > visibleEnemy: even general flag awareness beats free-roam combat
+    visibleEnemy: 100,
+    isInBattle: 80,
+    pushTarget: 70,
+    lastKnownEnemyPos: 60,
+    searchPos: 50,
+    roamPos: 30,
+    arrivedAtDest: 10,
+};
+
+export type BehaviorKind = 'battlefield' | 'defend' | 'moveto' | 'search' | 'flagpush' | 'flagengage' | 'push' | 'reposition';
 
 /**
  * Maps memory keys to behavior types
@@ -91,6 +113,12 @@ export class BotBehaviorSelector {
     private lastSearchPos: mod.Vector | null = null;
     private lastFlagPos: mod.Vector | null = null;
     private lastPushPos: mod.Vector | null = null;
+    private lastFlagPushAt: number = 0; // all-in approach re-feed clock (see executeFlagPush)
+    // Reposition override (ported from FFA-Gunmaster): the stuck watchdog briefly forces a jammed
+    // bot to shove off a wall, beating normal pursuit so it doesn't instantly re-issue a MoveTo
+    // straight back into the wall. Ends on arrival or timeout.
+    private repositionPos: mod.Vector | null = null;
+    private repositionUntil: number = 0;
 
     constructor(weights: Partial<Record<keyof BotMemoryFields, number>> = DEFAULT_WEIGHTS) {
         this.weights = weights;
@@ -113,6 +141,33 @@ export class BotBehaviorSelector {
         this.lastSearchPos = null;
         this.lastFlagPos = null;
         this.lastPushPos = null;
+        this.repositionPos = null;
+    }
+
+    /** Forget cached movement so the next tick RE-ISSUES its MoveTo — the skip-guards
+     *  (lastMoveToPos/lastSearchPos ≈ target -> return) otherwise suppress the re-issue
+     *  forever after a failed/blocked path. Called by the brain's stuck watchdog.
+     *  (Ported from FFA-Gunmaster.) */
+    resetMovement(): void {
+        this.currentBehavior = null;
+        this.lastMoveToPos = null;
+        this.lastSearchPos = null;
+        this.lastDefendPos = null;
+        this.lastPushPos = null;
+        // NOTE: lastFlagPos is deliberately kept — flag intent is objective state, not a
+        // movement cache, and the watchdog never fires while a flag behavior is active.
+    }
+
+    /** Stuck-watchdog hook (ported from FFA-Gunmaster): shove a jammed bot toward `pos` for
+     *  `durationMs`, overriding pursuit so it un-jams off a wall (and moves far enough that the
+     *  close-range LOS ray stops false-clearing THROUGH the wall). Keeps the bot's target. */
+    forceReposition(pos: mod.Vector, durationMs: number): void {
+        this.repositionPos = pos;
+        this.repositionUntil = Date.now() + durationMs;
+        this.currentBehavior = null;
+        this.lastMoveToPos = null;
+        this.lastSearchPos = null;
+        this.lastDefendPos = null;
     }
 
     /**
@@ -121,6 +176,28 @@ export class BotBehaviorSelector {
     update(player: mod.Player, memory: BotMemory): void {
         if (!mod.IsPlayerValid(player)) return;
         if (!mod.GetSoldierState(player, mod.SoldierStateBool.IsAlive)) return;
+
+        // REPOSITION OVERRIDE (ported from FFA-Gunmaster): briefly forced by the stuck watchdog to
+        // shove a jammed bot off a wall. Beats normal target-selection so the bot actually un-jams
+        // instead of the battlefield behavior instantly re-issuing a MoveTo straight back into the
+        // wall. Ends on arrival or timeout.
+        if (this.repositionPos && Date.now() < this.repositionUntil) {
+            try {
+                const bp = mod.GetSoldierState(player, mod.SoldierStateVector.GetPosition);
+                if (mod.DistanceBetween(bp, this.repositionPos) < 3) {
+                    this.repositionPos = null; // arrived — hand back to normal behavior
+                } else {
+                    if (this.currentBehavior !== 'reposition') {
+                        mod.AISetMoveSpeed(player, mod.MoveSpeed.Run);
+                        mod.AIValidatedMoveToBehavior(player, this.repositionPos);
+                        this.currentBehavior = 'reposition';
+                    }
+                    return;
+                }
+            } catch { this.repositionPos = null; }
+        } else if (this.repositionPos) {
+            this.repositionPos = null; // window elapsed
+        }
 
         // Find highest-weight memory key that is currently set
         const winnerKey = this.getWinnerKey(memory);
@@ -197,11 +274,49 @@ export class BotBehaviorSelector {
      * Always re-target visible enemies and ensure shooting is enabled
      */
     private executeBattlefield(player: mod.Player, memory: BotMemory): void {
-        // Apply battlefield behavior first (if not already in it)
+        const visibleEnemy = memory.get('visibleEnemy');
+        if (!visibleEnemy) {
+            // LOST SIGHT (the visibleEnemy TTL lapsed with no fresh LOS). Don't idle in
+            // 'battlefield' with no target: if we still remember WHERE we last saw them, CHASE
+            // that spot (executeSearch); once we arrive (it clears lastKnownEnemyPos) or the
+            // trail goes cold, drop the battle flag so we resume roaming instead of statue-ing
+            // out the isInBattle TTL. Fully INTERRUPTIBLE — re-spotting any enemy re-sets
+            // visibleEnemy (weight 100 > isInBattle 80) and a hit arms the retaliate lock; either
+            // yanks us straight back into the fight next tick. (Chase ported from FFA-Gunmaster.)
+            if (memory.has('lastKnownEnemyPos')) {
+                this.executeSearch(player, memory, 'lastKnownEnemyPos');
+            } else {
+                memory.clear('isInBattle');
+            }
+            return;
+        }
+
+        // WON-THE-FIGHT FIX (from FFA-Gunmaster): target dead or gone -> drop the WHOLE battle
+        // state NOW. Leaving isInBattle up blocked the roam sensor for its full TTL (and
+        // lastKnownEnemyPos for longer), so a bot that had just WON a fight stood frozen on the
+        // spot — a big share of the "bots stand around" reports.
+        let gone = false;
+        try {
+            gone =
+                !mod.IsPlayerValid(visibleEnemy) ||
+                !mod.GetSoldierState(visibleEnemy, mod.SoldierStateBool.IsAlive);
+        } catch {
+            gone = true;
+        }
+        if (gone) {
+            memory.clear('visibleEnemy');
+            memory.clear('isInBattle');
+            memory.clear('lastKnownEnemyPos');
+            return;
+        }
+
+        // LIVE visible enemy — ENGAGE. Apply the engine battlefield behavior (fight-while-moving)
+        // when first entering combat, then (re)assert OUR target on top of it each tick. Applying
+        // this AFTER the sight/gone checks means a lost-sight bot chases instead of standing in
+        // AIBattlefieldBehavior with no target (the old order re-applied it before the checks).
         if (this.currentBehavior !== 'battlefield') {
-            // Stop sprinting when engaging - use run speed for combat
             try {
-                mod.AISetMoveSpeed(player, mod.MoveSpeed.Run);
+                mod.AISetMoveSpeed(player, mod.MoveSpeed.Run); // stop sprinting when engaging
             } catch {}
             mod.AIBattlefieldBehavior(player);
             this.currentBehavior = 'battlefield';
@@ -210,15 +325,11 @@ export class BotBehaviorSelector {
             this.lastSearchPos = null;
         }
 
-        // ALWAYS set target AFTER behavior (to override any default targeting)
-        const visibleEnemy = memory.get('visibleEnemy');
-        if (visibleEnemy && mod.IsPlayerValid(visibleEnemy)) {
-            try {
-                mod.AISetTarget(player, visibleEnemy);
-                mod.AIEnableShooting(player, true);
-                mod.AIEnableTargeting(player, true);
-            } catch {}
-        }
+        try {
+            mod.AISetTarget(player, visibleEnemy);
+            mod.AIEnableShooting(player, true);
+            mod.AIEnableTargeting(player, true);
+        } catch {}
     }
 
     /**
@@ -263,6 +374,19 @@ export class BotBehaviorSelector {
 
         if (!targetPos) return;
 
+        // ARRIVED at the search point? Clear the memory key so the bot falls through to roaming
+        // instead of standing on the spot until the TTL expires. This is ALSO what hands the chase
+        // back: once lastKnownEnemyPos is cleared here, executeBattlefield drops isInBattle next
+        // tick and the bot resumes roaming. (Arrival-clear ported from FFA-Gunmaster — without it
+        // the chase would statue at the last-known position.)
+        try {
+            const botPos = mod.GetSoldierState(player, mod.SoldierStateVector.GetPosition);
+            if (mod.DistanceBetween(botPos, targetPos) < 4) {
+                memory.clear(memoryKey);
+                return;
+            }
+        } catch {}
+
         // Skip if already searching nearby position
         if (
             this.currentBehavior === 'search' &&
@@ -272,7 +396,13 @@ export class BotBehaviorSelector {
             return;
         }
 
-        // Move to search position
+        // Move to search position — sprint the long legs, run the approach (stay combat-ready:
+        // this is hunting a last-known enemy position). (Speed ramp ported from FFA-Gunmaster.)
+        try {
+            const botPos = mod.GetSoldierState(player, mod.SoldierStateVector.GetPosition);
+            const far = mod.DistanceBetween(botPos, targetPos) > 20;
+            mod.AISetMoveSpeed(player, far ? mod.MoveSpeed.Sprint : mod.MoveSpeed.Run);
+        } catch {}
         mod.AIValidatedMoveToBehavior(player, targetPos);
 
         this.currentBehavior = 'search';
@@ -434,7 +564,15 @@ export class BotBehaviorSelector {
         const botPos = mod.GetSoldierState(player, mod.SoldierStateVector.GetPosition);
         const distToFlag = mod.DistanceBetween(botPos, flagPos);
 
-        // If we have a visible enemy nearby, engage them IMMEDIATELY
+        // OVERTIME ALL-IN: the flag outranks the firefight. Bots still shoot (targeting
+        // stays on and they fire while moving), but they do NOT stop to duel — the old
+        // "any enemy within 15m -> switch to battlefield" bail is what left bots trading
+        // shots in a corridor while the overtime clock ran out. Only a point-blank threat
+        // (<= ALL_IN_FIGHT_RADIUS) or a low-urgency flag still earns a full stop.
+        const urgency = memory.get('flagUrgency') ?? 0;
+        const allIn = urgency >= SENSOR_CONFIG.FLAG_URGENCY_ALL_IN;
+        const breakOffDist = allIn ? BEHAVIOR_CONFIG.ALL_IN_FIGHT_RADIUS : 15;
+
         const visibleEnemy = memory.get('visibleEnemy');
         if (visibleEnemy && mod.IsPlayerValid(visibleEnemy)) {
             try {
@@ -444,8 +582,9 @@ export class BotBehaviorSelector {
                 // ALWAYS engage visible enemy
                 mod.AISetTarget(player, visibleEnemy);
 
-                // Switch to battlefield if enemy is close
-                if (enemyDist < 15) {
+                // Stop and fight only if they're inside the break-off radius AND we aren't
+                // already on the point (on the point, holding it IS the job).
+                if (enemyDist < breakOffDist && distToFlag > SENSOR_CONFIG.FLAG_CAPTURE_RADIUS) {
                     mod.AIBattlefieldBehavior(player);
                     this.currentBehavior = 'battlefield';
                     return;
@@ -453,19 +592,36 @@ export class BotBehaviorSelector {
             } catch {}
         }
 
-        // Skip if already pushing to same flag position
-        if (
+        // Skip if already pushing to same flag position. The flag NEVER moves, so this
+        // guard would otherwise issue the approach exactly once — and a move-to that
+        // fails or goes stale would leave the bot parked (the stuck watchdog deliberately
+        // stands down during flag behaviors). While all-in, re-feed on a cadence instead.
+        const nowMs = Date.now();
+        const sameFlag =
             this.currentBehavior === 'flagpush' &&
             this.lastFlagPos &&
-            mod.DistanceBetween(this.lastFlagPos, flagPos) <= BEHAVIOR_CONFIG.POS_EPSILON
-        ) {
+            mod.DistanceBetween(this.lastFlagPos, flagPos) <= BEHAVIOR_CONFIG.POS_EPSILON;
+        if (sameFlag && !(allIn && nowMs - this.lastFlagPushAt >= BEHAVIOR_CONFIG.ALL_IN_REFEED_MS)) {
             return;
         }
+        this.lastFlagPushAt = nowMs;
 
         if (distToFlag > SENSOR_CONFIG.FLAG_CAPTURE_RADIUS) {
-            // Move toward flag with combat readiness
-            // DefendPosition allows engaging enemies while moving
-            mod.AIDefendPositionBehavior(player, flagPos, 2.0, 12.0);
+            if (allIn && distToFlag > BEHAVIOR_CONFIG.ALL_IN_SPRINT_DIST) {
+                // OVERTIME: SPRINT the approach. AIDefendPositionBehavior moves on a leash
+                // (it wants to hold ground near the point) which made bots amble in from
+                // range; a validated move-to at Sprint is a direct run for the flag.
+                try {
+                    mod.AISetMoveSpeed(player, mod.MoveSpeed.Sprint);
+                } catch {}
+                mod.AIValidatedMoveToBehavior(player, flagPos);
+            } else {
+                // Close in / normal urgency: DefendPosition allows engaging while moving.
+                try {
+                    mod.AISetMoveSpeed(player, mod.MoveSpeed.Run);
+                } catch {}
+                mod.AIDefendPositionBehavior(player, flagPos, 2.0, 12.0);
+            }
         } else {
             // On flag - hold position and watch for enemies
             mod.AIDefendPositionBehavior(

@@ -215,13 +215,39 @@ export function randomizeBotNames(): void {
 
 // Get an available bot identity for a team and mark it as active immediately
 // (returns null if none available)
+/** Is this player id still a valid, ALIVE bot on the field? (Used to refuse handing out a
+ *  name that is visibly in use — belt-and-braces against a stale isActive flag.) */
+function isPlayerIdLiveBot(playerId: number): boolean {
+    try {
+        const all = mod.AllPlayers();
+        const count = mod.CountOf(all);
+        for (let i = 0; i < count; i++) {
+            const p = mod.ValueInArray(all, i) as mod.Player;
+            try {
+                if (mod.GetObjId(p) !== playerId) continue;
+                return (
+                    mod.IsPlayerValid(p) && mod.GetSoldierState(p, mod.SoldierStateBool.IsAlive)
+                );
+            } catch {}
+        }
+    } catch {}
+    return false;
+}
+
 export function getAvailableBotIdentity(teamId: number): BotIdentity | null {
     for (const identity of BOT_IDENTITIES) {
-        if (identity.teamId === teamId && !identity.isActive) {
-            // Mark as active immediately to prevent duplicate assignment
-            identity.isActive = true;
-            return identity;
+        if (identity.teamId !== teamId || identity.isActive) continue;
+        // NEVER reuse a name whose bot is still alive on the field. A free identity has
+        // currentPlayerId === null, so this scan only runs for suspicious leftovers.
+        if (identity.currentPlayerId !== null && isPlayerIdLiveBot(identity.currentPlayerId)) {
+            identity.isActive = true; // re-reserve it for the bot that still owns it
+            rosterLog(`Identity ${identity.id} (${identity.name}) still live — not reused`);
+            continue;
         }
+        // Mark as active immediately to prevent duplicate assignment
+        identity.isActive = true;
+        identity.currentPlayerId = null;
+        return identity;
     }
     return null;
 }
@@ -260,11 +286,48 @@ export function deactivateBotIdentity(playerId: number): void {
 }
 
 // Reset bot identity active states at round start (they'll be re-associated when spawned)
+/**
+ * Per-round identity reconcile. MUST NOT blindly clear every identity: a bot that SURVIVES
+ * a round keeps playing into the next one, and releasing its identity put its name back in
+ * the free pool — the next backfill then spawned a SECOND bot with that same name onto the
+ * same team (the "multiple muj bots" bug), and the survivor's scoreboard stats went
+ * untracked because stats are looked up by identity.
+ *
+ * So: an identity stays reserved only while its bot is still a valid, ALIVE player.
+ * Dead bots (their bodies unspawn ~BOT_UNSPAWN_DELAY after death) and identities that were
+ * reserved but never bound to a deployed bot are released for reuse.
+ *
+ * Call this ONLY between rounds (resetRound), never mid-spawn-batch: identities reserved by
+ * spawnCustomBot have currentPlayerId === null until their bot deploys, and pruning during
+ * a batch would hand those same identities out twice.
+ */
 export function resetBotIdentitiesForRound(): void {
+    const liveBotIds: Set<number> = new Set<number>();
+    try {
+        const all = mod.AllPlayers();
+        const count = mod.CountOf(all);
+        for (let i = 0; i < count; i++) {
+            const p = mod.ValueInArray(all, i) as mod.Player;
+            try {
+                if (!mod.IsPlayerValid(p)) continue;
+                if (!mod.GetSoldierState(p, mod.SoldierStateBool.IsAISoldier)) continue;
+                if (!mod.GetSoldierState(p, mod.SoldierStateBool.IsAlive)) continue;
+                liveBotIds.add(mod.GetObjId(p));
+            } catch {}
+        }
+    } catch {}
+
+    let kept = 0;
     for (const identity of BOT_IDENTITIES) {
+        if (identity.currentPlayerId !== null && liveBotIds.has(identity.currentPlayerId)) {
+            identity.isActive = true; // survivor keeps its name AND its stats
+            kept++;
+            continue;
+        }
         identity.isActive = false;
         identity.currentPlayerId = null;
     }
+    rosterLog(`Bot identities reconciled: ${kept} survivor(s) kept, ${BOT_IDENTITIES.length - kept} released`);
 }
 
 // Get bot stats by player (uses persistent identity stats for bots)

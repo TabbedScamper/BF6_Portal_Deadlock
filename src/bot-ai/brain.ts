@@ -4,7 +4,7 @@
  */
 
 import { BotMemory } from './memory.ts';
-import { BotBehaviorSelector, DEFAULT_WEIGHTS } from './behaviors.ts';
+import { BotBehaviorSelector, DEFAULT_WEIGHTS, OVERTIME_WEIGHTS } from './behaviors.ts';
 import type { BehaviorKind } from './behaviors.ts';
 import {
     SENSOR_CONFIG,
@@ -66,6 +66,13 @@ export class BotBrain {
     private lastRoamSenseTime: number = 0;
     private lastFlagSenseTime: number = 0;
     private nextMoveFlavor: number = 0;
+
+    // Stuck watchdog (ported from FFA-Gunmaster) — see runStuckSensor.
+    private stuckCheckAt: number = 0;
+    private stuckPos: mod.Vector | null = null;
+
+    // True while the OVERTIME_WEIGHTS set is installed (flag beats combat) — see runFlagSensor.
+    private overtimeWeightsActive: boolean = false;
 
     // External references
     private flagPosGetter: (() => mod.Vector | null) | null = null;
@@ -199,6 +206,7 @@ export class BotBrain {
         this.runEnemySensor(now);
         this.runRoamSensor(now);
         this.runArrivalSensor();
+        this.runStuckSensor(now);
 
         // Select and execute behavior
         this.behaviorSelector.update(this.player, this.memory);
@@ -222,12 +230,13 @@ export class BotBrain {
                 else if (r < 0.74) mod.SetAiInput(this.player, mod.AiInput.Prone, 1.2); // ~2% prone
                 // else: just keep fighting
             } else {
-                // Repositioning: sprint bursts and the occasional slide (sprint -> crouch).
-                if (r < 0.5) mod.SetAiInput(this.player, mod.AiInput.Sprint, 0.9 + Math.random());
-                else if (r < 0.6) {
+                // Repositioning: SPRINT-heavy (75%, from FFA-Gunmaster — bots should hustle
+                // between fights instead of strolling), occasional slide, rare crouch-peek.
+                if (r < 0.75) mod.SetAiInput(this.player, mod.AiInput.Sprint, 0.9 + Math.random());
+                else if (r < 0.85) {
                     mod.SetAiInput(this.player, mod.AiInput.Sprint, 0.5);
                     mod.SetAiInput(this.player, mod.AiInput.Crouch, 0.5); // slide-ish transition
-                } else if (r < 0.67) mod.SetAiInput(this.player, mod.AiInput.Crouch, 0.6); // ~7% crouch
+                } else if (r < 0.9) mod.SetAiInput(this.player, mod.AiInput.Crouch, 0.6); // ~5% crouch
             }
         } catch {}
     }
@@ -325,6 +334,68 @@ export class BotBrain {
     }
 
     /**
+     * STUCK WATCHDOG (ported from FFA-Gunmaster) — the "bots just stand in place" killer.
+     * A MoveTo can fail or dead-end silently (unreachable/blocked navmesh point, engine
+     * gives up) and the behavior skip-guards then suppress any re-issue while roamPos
+     * blocks a new roll for its full TTL. Detection: barely moved over the last ~2.5s with
+     * nobody to shoot -> whatever the plan was, it failed. Wipe ALL movement intent, reset
+     * the selector's caches and force an immediate roam re-roll, so the bot gets a fresh
+     * destination within one tick instead of statue-ing out the TTLs.
+     *
+     * Deadlock note: a bot legitimately HOLDS position while capturing/defending the flag,
+     * so the watchdog stands down whenever the flag behavior owns the bot.
+     */
+    private runStuckSensor(now: number): void {
+        if (now < this.stuckCheckAt) return;
+        this.stuckCheckAt = now + 2500;
+        try {
+            const pos = mod.GetSoldierState(this.player, mod.SoldierStateVector.GetPosition);
+            const prev = this.stuckPos;
+            this.stuckPos = pos;
+            if (!prev) return;
+            const behavior = this.behaviorSelector.getCurrent();
+            // Holding the flag zone is standing still ON PURPOSE — never "unstick" that.
+            if (behavior === 'flagpush' || behavior === 'flagengage') return;
+            if (mod.DistanceBetween(prev, pos) > 1.5) return; // moving fine (pursuing/roaming)
+
+            // MOTIONLESS. If we still have a target we're almost certainly JAMMED against geometry —
+            // a MoveTo to a spot behind a wall (incl. locked on ANOTHER bot through it via the
+            // close-range LOS false-clear) stops at the wall and the bot freezes facing it. This
+            // used to be SKIPPED for "has a visible enemy" (the removed early-return above), which is
+            // exactly why those bots statue up until attacked. Don't abandon the fight: SHOVE off the
+            // wall (back up + sideways) — that un-jams AND moves far enough that the LOS ray stops
+            // seeing through the wall. (Wall-jam un-stick ported from FFA-Gunmaster.)
+            const hasTarget =
+                this.memory.has('visibleEnemy') ||
+                this.memory.has('lastKnownEnemyPos') ||
+                this.memory.has('isInBattle');
+            if (hasTarget) {
+                const facing = mod.GetSoldierState(this.player, mod.SoldierStateVector.GetFacingDirection);
+                const fx = mod.XComponentOf(facing);
+                const fz = mod.ZComponentOf(facing);
+                const side = Math.random() < 0.5 ? 1 : -1;
+                // back off along -facing (6m) + a perpendicular slide (perp of (fx,fz) = (-fz,fx), 4m)
+                const dest = mod.CreateVector(
+                    mod.XComponentOf(pos) - fx * 6 + -fz * side * 4,
+                    mod.YComponentOf(pos),
+                    mod.ZComponentOf(pos) - fz * 6 + fx * side * 4
+                );
+                this.behaviorSelector.forceReposition(dest, 1200); // ~1.2s shove, overrides pursuit
+                return; // keep the target — just un-jam off the wall
+            }
+
+            // No target — the idle-stuck recovery: wipe movement intent + force a fresh roam.
+            this.memory.clear('roamPos');
+            this.memory.clear('searchPos');
+            this.memory.clear('lastKnownEnemyPos');
+            this.memory.clear('isInBattle');
+            this.memory.clear('arrivedAtDest');
+            this.lastRoamSenseTime = 0; // next tick rolls a fresh roam point
+            this.behaviorSelector.resetMovement(); // and the MoveTo actually re-issues
+        } catch {}
+    }
+
+    /**
      * Flag situation sensor - evaluates flag priority and updates memory
      */
     private runFlagSensor(now: number): void {
@@ -333,6 +404,18 @@ export class BotBrain {
 
         const flagPos = this.flagPosGetter?.() ?? null;
         const urgency = this.flagUrgencyGetter?.() ?? SENSOR_CONFIG.FLAG_URGENCY_BASE;
+
+        // OVERTIME ALL-IN: once urgency crosses the threshold, swap in the weight set that
+        // ranks the flag ABOVE visibleEnemy, so bots run the point instead of stopping to
+        // duel. Swapped back when urgency drops (or the flag despawns) so normal rounds
+        // keep their combat-first priorities. Only fires on the actual transition.
+        const allIn = urgency >= SENSOR_CONFIG.FLAG_URGENCY_ALL_IN;
+        if (allIn !== this.overtimeWeightsActive) {
+            this.overtimeWeightsActive = allIn;
+            this.behaviorSelector.setWeights(allIn ? OVERTIME_WEIGHTS : DEFAULT_WEIGHTS);
+            this.behaviorSelector.resetMovement(); // re-issue under the new priority NOW
+            logBrain(`Flag urgency ${urgency.toFixed(2)} -> ${allIn ? 'ALL-IN' : 'normal'} weights`);
+        }
 
         // Update flag situation in memory
         senseFlagSituation(this.player, this.memory, flagPos, urgency);
@@ -397,6 +480,18 @@ export function removeBotBrain(player: mod.Player): void {
     const playerId = mod.GetObjId(player);
     if (botBrains.delete(playerId)) {
         logBrain(`Removed brain for bot ${playerId}`);
+    }
+}
+
+/**
+ * Remove a brain by raw player id — for cleanup AFTER the engine player is already gone
+ * (ported from FFA-Gunmaster). Deadlock unspawns every bot ~2s after it dies, so the
+ * player object is unresolvable by then and removeBotBrain() could never fire: brains
+ * accumulated for the whole match and tickAllBotBrains iterated all of them every tick.
+ */
+export function removeBotBrainById(playerId: number): void {
+    if (botBrains.delete(playerId)) {
+        logBrain(`Removed brain for departed bot ${playerId}`);
     }
 }
 

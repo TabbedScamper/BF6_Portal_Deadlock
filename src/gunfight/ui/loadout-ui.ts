@@ -1,3 +1,12 @@
+// ============================================================================
+// LOADOUT UI — the "NEW LOADOUT" card AND the real equip path
+// ============================================================================
+// Two jobs: (1) the LoadoutUI class draws the on-screen "NEW LOADOUT" card with the
+// round's weapon/gadget images; (2) its static helpers are what ACTUALLY equip the
+// weapons + gadgets onto a player (the card is cosmetic, these calls are not). Also
+// defines the `Loadout` interface used across the mode. The loadout DATA + random
+// pick live in ../loadout.ts; this file only shows + applies the chosen loadout.
+// ============================================================================
 import { Timers } from 'bf6-portal-utils/timers/index.ts';
 import { UIContainer } from 'bf6-portal-utils/ui/components/container/index.ts';
 import { UIText } from 'bf6-portal-utils/ui/components/text/index.ts';

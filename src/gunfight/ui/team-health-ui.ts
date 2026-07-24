@@ -1,3 +1,17 @@
+// ============================================================================
+// TEAM HEALTH UI — top-center bars + THE ROUND / OVERTIME CLOCK
+// ============================================================================
+// Per-player HUD: both teams' aggregate health bars, alive-dot icons, and round
+// score ticks. It ALSO owns the authoritative round clock — the 40s round timer
+// and the 10s overtime timer live here — and fires the overtime-start / round-end
+// callbacks the rest of the mode hangs off. If you're changing round length or OT
+// length, this is the file (see ARCHITECTURE.md §7 — those durations aren't in
+// config.ts yet).
+//
+// WHY per-receiver sounds: the timer's tick beeps / VO are played PER PLAYER (each
+// with its own receiver) — playing one global sound per tick would stack N copies
+// (one per client) and get loud/muddy.
+// ============================================================================
 import { Timers } from 'bf6-portal-utils/timers/index.ts';
 import { UIContainer } from 'bf6-portal-utils/ui/components/container/index.ts';
 import { UIText } from 'bf6-portal-utils/ui/components/text/index.ts';

@@ -1,3 +1,13 @@
+// ============================================================================
+// FLAG CAPTURE UI — the overtime win condition
+// ============================================================================
+// Only relevant in OVERTIME (when a round timer runs out on a health tie). Raises
+// the flag object (spatial ObjId 5), draws its beacon FX + world icon, then watches
+// for a team standing on it: 3s of uncontested presence = capture. Handles the
+// contested / capturing / paused states and draws each player's capture-progress
+// bar. Calls back into index.ts on capture so finishRound() awards the round.
+// The flag is hidden again the instant overtime ends. See ARCHITECTURE.md §2-3.
+// ============================================================================
 import { Timers } from 'bf6-portal-utils/timers/index.ts';
 import { getAlivePlayersOnTeam } from '../../helpers/index.ts';
 

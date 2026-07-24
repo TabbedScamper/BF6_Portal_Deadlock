@@ -1,3 +1,15 @@
+// ============================================================================
+// ROUND RESULT UI — MW2-style win/loss/draw cards + THE AUTHORITATIVE SCORE
+// ============================================================================
+// Two jobs: (1) draw the per-player round-result card, colored from THAT viewer's
+// team perspective (win = their team took the round, loss = the other team, draw =
+// tie on health); (2) own team1Score / team2Score — this module is the SCORE SOURCE
+// OF TRUTH for the match. index.ts reads getScores() to decide the match winner, so
+// do NOT keep a parallel score counter elsewhere; call updateScores() here.
+//
+// Heads-up for editors: the win path (showRoundResult) and the draw path
+// (showRoundDrawResult) are large, near-duplicated UI builds — change both together.
+// ============================================================================
 import { Timers } from 'bf6-portal-utils/timers/index.ts';
 import { sfxVol } from '../../config.ts';
 import { UIContainer } from 'bf6-portal-utils/ui/components/container/index.ts';

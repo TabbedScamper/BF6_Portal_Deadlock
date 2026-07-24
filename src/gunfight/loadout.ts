@@ -327,355 +327,50 @@ interface CustomPrimary {
 }
 
 const CUSTOM_PRIMARY_POOL: CustomPrimary[] = [
-    {
-        weapon: W.Sniper_PSR,
-        name: SK.custom.longgoodbye,
-        attachments: [
-            A.Scope_TS_HD_600x,
-            A.Muzzle_Long_Suppressor,
-            A.Barrel_27_MK22,
-            A.Left_Range_Finder,
-            A.Magazine_7rnd_Magazine, // PSR mag family is 7rnd (10rnd was wrong family)
-            A.Ammo_Match_Grade,
-            A.Bottom_Slim_Angled,
-        ],
-    },
-    {
-        weapon: W.LMG_DRS_IAR,
-        name: SK.custom.suppressingopinion,
-        attachments: [
-            A.Scope_RO_S_125x,
-            A.Muzzle_Lightened_Suppressor,
-            A.Barrel_165_LSW, // DRS IAR is the 165 family (145_Carbine is the M4A1 barrel)
-            A.Bottom_Canted_Stubby,
-            A.Magazine_30rnd_Fast_Mag, // 30rnd family (40rnd was wrong)
-            A.Top_50_mW_Blue,
-        ],
-    },
-    {
-        weapon: W.AssaultRifle_KORD_6P67,
-        name: SK.custom.siberianexpress,
-        attachments: [
-            A.Scope_SU_123_150x,
-            A.Muzzle_Double_port_Brake,
-            A.Barrel_415mm_Fluted, // KORD is the 415mm family (11_Heavy is the SL9 barrel)
-            A.Bottom_Canted_Stubby,
-            A.Magazine_30rnd_Fast_Mag, // 30rnd family (36rnd was wrong)
-            A.Right_50_mW_Blue,
-        ],
-    },
-    {
-        weapon: W.Carbine_M277,
-        name: SK.custom.paperwork,
-        attachments: [
-            A.Scope_PVQ_31_400x,
-            A.Muzzle_Lightened_Suppressor,
-            A.Barrel_16_Rifle, // M277 is the 16 family (11_Heavy is the SL9 barrel)
-            A.Bottom_Full_Angled,
-            A.Magazine_15rnd_Fast_Mag, // 15rnd family (25rnd was wrong)
-            A.Ergonomic_Improved_Mag_Catch,
-            A.Top_5_mW_Green,
-        ],
-    },
-    {
-        weapon: W.SMG_UMG_40,
-        name: SK.custom.officememo,
-        attachments: [
-            A.Scope_Aperture_Sight,
-            A.Right_50_mW_Green,
-            A.Muzzle_CQB_Suppressor,
-            A.Barrel_200mm_Fluted, // UMG-40 is the 200mm family (11_Heavy is the SL9 barrel)
-            A.Bottom_Canted_Stubby,
-            A.Magazine_25rnd_Fast_Mag, // 25rnd family (30rnd was wrong)
-            A.Ammo_Hollow_Point,
-        ],
-    },
-    {
-        weapon: W.Sniper_Mini_Scout,
-        name: SK.custom.pocketphysics,
-        attachments: [
-            A.Scope_S_VPS_600x,
-            A.Scope_Canted_Iron_Sights,
-            A.Muzzle_CQB_Suppressor,
-            A.Barrel_16_Pencil, // Mini Scout is the 16 family (349mm is the L110 barrel)
-            A.Right_120_mW_Blue,
-            A.Bottom_Slim_Angled,
-            A.Magazine_10rnd_Fast_Mag,
-        ],
-    },
-    {
-        weapon: W.Shotgun_M87A1,
-        name: SK.custom.thelandlord,
-        attachments: [A.Scope_Iron_Sights, A.Bottom_Full_Angled, A.Right_50_mW_Green, A.Left_Flashlight],
-    },
-    {
-        weapon: W.Shotgun_DB_12,
-        name: SK.custom.hallwaylawyer,
-        attachments: [A.Scope_Iron_Sights, A.Bottom_Full_Angled, A.Right_50_mW_Green],
-    },
-    {
-        weapon: W.Sniper_SV_98,
-        name: SK.custom.whitefeather,
-        attachments: [
-            A.Scope_TS_HD_600x,
-            A.Scope_Canted_Iron_Sights,
-            A.Muzzle_Long_Suppressor,
-            A.Barrel_650mm_Fluted, // SV-98 is the 650mm family (27_MK22 is the PSR barrel)
-            A.Right_120_mW_Blue,
-            A.Bottom_Slim_Angled,
-            A.Magazine_10rnd_Magazine,
-        ],
-    },
-    {
-        weapon: W.SMG_KV9,
-        name: SK.custom.sewingmachine,
-        attachments: [
-            A.Scope_Aperture_Sight,
-            A.Right_50_mW_Green,
-            A.Muzzle_CQB_Suppressor,
-            A.Barrel_55_Fluted, // KV9 is the 55 family (11_Heavy is the SL9 barrel)
-            A.Bottom_Canted_Stubby,
-            A.Magazine_17rnd_Fast_Mag, // 17rnd family (30rnd was wrong)
-            A.Ammo_Hollow_Point,
-        ],
-    },
-    {
-        weapon: W.LMG_M240L,
-        name: SK.custom.beltfedtherapy,
-        attachments: [
-            A.Scope_SU_123_150x,
-            A.Muzzle_Long_Suppressor,
-            A.Barrel_20_Lima, // M240L own barrel (20_Long belongs to the M87A1 family)
-            A.Right_50_mW_Green,
-            A.Bottom_Classic_Grip_Pod,
-            A.Magazine_50rnd_Loose_Belt, // its belt family (75rnd box was wrong)
-        ],
-    },
-    {
-        weapon: W.Carbine_GRT_BC,
-        name: SK.custom.quietquitter,
-        attachments: [
-            A.Scope_RO_M_175x,
-            A.Muzzle_Lightened_Suppressor,
-            A.Right_50_mW_Blue,
-            A.Bottom_Low_Profile_Stubby,
-            A.Magazine_30rnd_Fast_Mag,
-            A.Ergonomic_Improved_Mag_Catch,
-        ],
-    },
-    {
-        weapon: W.AssaultRifle_TR_7,
-        name: SK.custom.bullpupenergy,
-        attachments: [
-            A.Scope_Osa_7_100x,
-            A.Muzzle_Compensated_Brake,
-            A.Top_50_mW_Blue,
-            A.Barrel_17_Fluted,
-            A.Magazine_10rnd_Fast_Mag, // TR-7 mag family is 10rnd (30rnd was wrong)
-            A.Ergonomic_Improved_Mag_Catch,
-        ],
-    },
-    {
-        weapon: W.DMR_SVDM,
-        name: SK.custom.markedsafe,
-        attachments: [
-            A.Scope_ST_Prism_500x,
-            A.Magazine_5rnd_Fast_Mag, // SVDM mag family is 5rnd (20rnd was wrong)
-            A.Bottom_Slim_Angled,
-            A.Barrel_550mm_Factory, // SVDM own barrel (565mm is another family)
-            A.Muzzle_Lightened_Suppressor,
-            A.Right_120_mW_Blue,
-            A.Scope_Canted_Iron_Sights,
-            A.Ergonomic_Improved_Mag_Catch,
-        ],
-    },
-    {
-        weapon: W.DMR_M39_EMR,
-        name: SK.custom.scenicroute,
-        attachments: [
-            A.Scope_Iron_Sights,
-            A.Muzzle_Linear_Comp,
-            A.Barrel_22_E3_Long, // M39 is the 22 family (16_Short is a carbine barrel)
-            A.Right_50_mW_Blue,
-            A.Bottom_Bipod,
-            A.Magazine_15rnd_Magazine,
-            A.Ammo_Hollow_Point,
-        ],
-    },
-    {
-        weapon: W.AssaultRifle_M433,
-        name: SK.custom.hrapproved,
-        attachments: [
-            A.Scope_Iron_Sights,
-            A.Muzzle_Double_port_Brake,
-            A.Barrel_145_Alt, // M433 is the 145 family (165_Fluted belongs to DRS/M417)
-            A.Magazine_20rnd_Magazine,
-            A.Ergonomic_Match_Trigger,
-            A.Ammo_Polymer_Case,
-            A.Left_120_mW_Blue,
-            A.Right_Flashlight,
-        ],
-    },
-    {
-        weapon: W.Carbine_M417_A2,
-        name: SK.custom.longarm,
-        attachments: [
-            A.Scope_GRIM_150x,
-            A.Muzzle_Standard_Suppressor,
-            A.Barrel_165_Rifle, // M417 own 165 variant
-            A.Magazine_10rnd_Fast_Mag, // 10rnd family (20rnd was wrong)
-            A.Ergonomic_Magwell_Flare,
-            A.Bottom_6H64_Vertical,
-            A.Top_50_mW_Blue,
-        ],
-    },
-    // ==================== NEW CARDS (2026-07-17 arsenal expansion) ====================
-    // All barrels/magazines verified against each weapon's family (stock tables + armory data).
-    {
-        // L85A3 — "THE QUEUE": polite, orderly, suppressed. Waits its turn, wins the trade.
-        weapon: W.AssaultRifle_L85A3,
-        name: SK.custom.thequeue,
-        attachments: [
-            A.Scope_SU_123_150x,
-            A.Muzzle_Standard_Suppressor,
-            A.Barrel_518mm_Fluted,
-            A.Magazine_20rnd_Fast_Mag,
-            A.Bottom_6H64_Vertical,
-            A.Right_Flashlight,
-        ],
-    },
-    {
-        // NVO 228E — "PAPER SHREDDER": brake + match trigger, dumps a 20 into center mass.
-        weapon: W.AssaultRifle_NVO_228E,
-        name: SK.custom.papershredder,
-        attachments: [
-            A.Scope_RO_M_175x,
-            A.Muzzle_Double_port_Brake,
-            A.Barrel_409mm_Fluted,
-            A.Magazine_20rnd_Fast_Mag,
-            A.Bottom_Canted_Stubby,
-            A.Ergonomic_Match_Trigger,
-        ],
-    },
-    {
-        // AK4D — "OLD RELIABLE": no gimmicks, hits like a court summons.
-        weapon: W.AssaultRifle_AK4D,
-        name: SK.custom.oldreliable,
-        attachments: [
-            A.Scope_Osa_7_100x,
-            A.Muzzle_Compensated_Brake,
-            A.Barrel_450mm_Standard,
-            A.Magazine_15rnd_Fast_Mag,
-            A.Bottom_Full_Angled,
-            A.Ammo_Polymer_Case,
-        ],
-    },
-    {
-        // M4A1 — "STANDARD ISSUE": the tournament-legal cardboard-box build. It just works.
-        weapon: W.Carbine_M4A1,
-        name: SK.custom.standardissue,
-        attachments: [
-            A.Scope_R_MR_100x,
-            A.Muzzle_Linear_Comp,
-            A.Barrel_145_Carbine,
-            A.Magazine_20rnd_Fast_Mag,
-            A.Bottom_Low_Profile_Stubby,
-            A.Ergonomic_Improved_Mag_Catch,
-            A.Top_5_mW_Green,
-        ],
-    },
-    {
-        // SGX — "VENDING MACHINE": insert trigger pull, dispense 9mm. CQB special.
-        weapon: W.SMG_SGX,
-        name: SK.custom.vendingmachine,
-        attachments: [
-            A.Scope_Aperture_Sight,
-            A.Muzzle_CQB_Suppressor,
-            A.Barrel_6_Fluted,
-            A.Magazine_30rnd_Fast_Mag,
-            A.Bottom_Canted_Stubby,
-            A.Ammo_Hollow_Point,
-        ],
-    },
-    {
-        // USG-90 — "TUPPERWARE PARTY": 50 rounds of sealed-fresh plastic-fantastic.
-        weapon: W.SMG_USG_90,
-        name: SK.custom.tupperwareparty,
-        attachments: [
-            A.Scope_RO_S_125x,
-            A.Muzzle_Lightened_Suppressor,
-            A.Barrel_264mm_Fluted,
-            A.Magazine_50rnd_Magazine,
-            A.Bottom_Slim_Angled,
-            A.Right_50_mW_Green,
-        ],
-    },
-    {
-        // QBZ-192 — "JADE RABBIT": fast handling, brake for the mid-range hop.
-        weapon: W.Carbine_QBZ_192,
-        name: SK.custom.jaderabbit,
-        attachments: [
-            A.Scope_GRIM_150x,
-            A.Muzzle_Single_port_Brake,
-            A.Barrel_314mm_Fluted,
-            A.Magazine_30rnd_Fast_Mag,
-            A.Bottom_Full_Angled,
-            A.Top_50_mW_Blue,
-        ],
-    },
-    {
-        // M2010 ESR — "TAX SEASON": one form, filed at 600x, always collects.
-        weapon: W.Sniper_M2010_ESR,
-        name: SK.custom.taxseason,
-        attachments: [
-            A.Scope_TS_HD_600x,
-            A.Scope_Canted_Iron_Sights,
-            A.Muzzle_Long_Suppressor,
-            A.Barrel_24_Fluted,
-            A.Magazine_5rnd_Fast_Mag,
-            A.Left_Range_Finder,
-            A.Bottom_Slim_Angled,
-        ],
-    },
-    {
-        // M123K — "PROPERTY DAMAGE": the landlord's insurance nightmare. Bipod and commit.
-        weapon: W.LMG_M123K,
-        name: SK.custom.propertydamage,
-        attachments: [
-            A.Scope_SU_123_150x,
-            A.Muzzle_Double_port_Brake,
-            A.Barrel_612mm_VMW,
-            A.Magazine_100rnd_Belt_Pouch,
-            A.Bottom_Bipod,
-            A.Right_Flashlight,
-        ],
-    },
-    {
-        // SCW-10 — "SHOPPING CART": compact, rattly, goes exactly where you shove it.
-        weapon: W.SMG_SCW_10,
-        name: SK.custom.shoppingcart,
-        attachments: [
-            A.Scope_Aperture_Sight,
-            A.Muzzle_CQB_Suppressor,
-            A.Barrel_68_Fluted,
-            A.Magazine_15rnd_Fast_Mag,
-            A.Bottom_Canted_Stubby,
-            A.Ammo_Hollow_Point,
-        ],
-    },
-    {
-        // M60 — "COMPANY PICNIC": everyone's invited. Bring a folding chair (bipod included).
-        weapon: W.LMG_M_60,
-        name: SK.custom.companypicnic,
-        attachments: [
-            A.Scope_RO_S_125x,
-            A.Muzzle_Compensated_Brake,
-            A.Barrel_17_Cut,
-            A.Magazine_50rnd_Loose_Belt,
-            A.Bottom_Bipod,
-            A.Right_50_mW_Green,
-        ],
-    },
+    // ==================== GUNMASTER ARSENAL (2026-07-20) ====================
+    // Kitted builds ported from FFA-Gunmaster (in-game-validated attachment families),
+    // named by their REAL weapon names — no joke names, no AMPED prefix, no FX system.
+    { weapon: W.AssaultRifle_M433, name: SK.weapons.m433, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_165_Fluted, A.Bottom_Slim_Angled, A.Magazine_40rnd_Fast_Mag, A.Ammo_Hollow_Point, A.Ergonomic_Magwell_Flare, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Top_120_mW_Blue, A.Right_Flashlight] },
+    { weapon: W.AssaultRifle_B36A4, name: SK.weapons.b36a4, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_391mm_CQB, A.Bottom_Slim_Angled, A.Magazine_45rnd_Fast_Mag, A.Ammo_Synthetic_Tip, A.Ergonomic_Match_Trigger, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Top_120_mW_Blue, A.Right_Flashlight] },
+    { weapon: W.AssaultRifle_SOR_556_Mk2, name: SK.weapons.sor556mk2, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_18_Custom, A.Bottom_Slim_Angled, A.Magazine_45rnd_Fast_Mag, A.Ammo_Synthetic_Tip, A.Ergonomic_Rail_Cover, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Top_120_mW_Blue, A.Right_Flashlight] },
+    { weapon: W.AssaultRifle_AK4D, name: SK.weapons.ak4d, attachments: [A.Muzzle_CQB_Suppressor, A.Barrel_409mm_US, A.Bottom_Slim_Angled, A.Magazine_30rnd_Magazine, A.Ammo_Hollow_Point, A.Ergonomic_Match_Trigger, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Left_Flashlight, A.Right_120_mW_Blue] },
+    { weapon: W.AssaultRifle_TR_7, name: SK.weapons.tr7, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_415mm_Fluted, A.Bottom_Ribbed_Stubby, A.Magazine_30rnd_Magazine, A.Ammo_Hollow_Point, A.Ergonomic_Improved_Mag_Catch, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Right_Flashlight] },
+    { weapon: W.AssaultRifle_KORD_6P67, name: SK.weapons.kord6p67, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_415mm_Fluted, A.Bottom_Slim_Angled, A.Magazine_45rnd_Fast_Mag, A.Ammo_Hollow_Point, A.Ergonomic_Match_Trigger, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Right_Laser_Light_Combo_Green] },
+    { weapon: W.AssaultRifle_NVO_228E, name: SK.weapons.nvo228e, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_409mm_Cut, A.Bottom_Slim_Angled, A.Magazine_40rnd_Fast_Mag, A.Ammo_Hollow_Point, A.Ergonomic_Match_Trigger, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Left_Flashlight, A.Right_120_mW_Blue] },
+    { weapon: W.AssaultRifle_L85A3, name: SK.weapons.l85a3, attachments: [A.Muzzle_CQB_Suppressor, A.Barrel_442_mm_CQB, A.Bottom_Slim_Angled, A.Magazine_45rnd_Fast_Mag, A.Ammo_Synthetic_Tip, A.Ergonomic_Match_Trigger, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Top_120_mW_Blue, A.Right_Flashlight] },
+    { weapon: W.Shotgun_M87A1, name: SK.weapons.m87a1, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_20_Factory, A.Bottom_Slim_Angled, A.Magazine_7_Shell_Tube, A.Ammo_Slugs, A.Scope_Mini_Flex_100x, A.Left_Flashlight, A.Right_120_mW_Blue] },
+    { weapon: W.Shotgun_M1014, name: SK.weapons.m1014, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_185_Factory, A.Bottom_Slim_Angled, A.Magazine_6_Shell_Tube, A.Ammo_Slugs, A.Scope_Mini_Flex_100x, A.Left_Flashlight, A.Right_120_mW_Blue] },
+    { weapon: W.Shotgun__185KS_K, name: SK.weapons['185ksk'], attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_430mm_Cut, A.Bottom_Slim_Angled, A.Magazine_8rnd_Fast_Mag, A.Ammo_Slugs, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Left_Flashlight, A.Right_120_mW_Blue] },
+    { weapon: W.Sniper_M2010_ESR, name: SK.weapons.m2010, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_26_Carbon, A.Bottom_Classic_Grip_Pod, A.Magazine_8rnd_Fast_Mag, A.Ammo_Tungsten_Core, A.Ergonomic_DLC_Bolt, A.Scope_1p88_Variable, A.Top_120_mW_Blue, A.Left_Range_Finder] },
+    { weapon: W.Sniper_SV_98, name: SK.weapons.sv98, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_514mm_Carbine, A.Bottom_Classic_Grip_Pod, A.Magazine_10rnd_Magazine, A.Ammo_Tungsten_Core, A.Ergonomic_DLC_Bolt, A.Scope_1p88_Variable, A.Scope_Canted_Iron_Sights, A.Left_Range_Finder, A.Right_120_mW_Blue] },
+    { weapon: W.Sniper_PSR, name: SK.weapons.psr, attachments: [A.Muzzle_CQB_Suppressor, A.Barrel_27_MK22, A.Bottom_Classic_Grip_Pod, A.Magazine_10rnd_Magazine, A.Ammo_Tungsten_Core, A.Ergonomic_DLC_Bolt, A.Scope_1p88_Variable, A.Scope_Anti_Glare_Coating, A.Top_120_mW_Blue, A.Left_Range_Finder] },
+    { weapon: W.DMR_M39_EMR, name: SK.weapons.m39emr, attachments: [A.Muzzle_Long_Suppressor, A.Barrel_16_Short, A.Bottom_Slim_Angled, A.Magazine_25rnd_Magazine, A.Ammo_Hollow_Point, A.Ergonomic_Improved_Mag_Catch, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Left_Flashlight, A.Right_120_mW_Blue] },
+    { weapon: W.DMR_LMR27, name: SK.weapons.lmr27, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_215_Fluted, A.Bottom_Full_Angled, A.Magazine_20rnd_Fast_Mag, A.Ammo_Hollow_Point, A.Ergonomic_Improved_Mag_Catch, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Left_Flashlight, A.Right_120_mW_Blue] },
+    { weapon: W.DMR_SVK_86, name: SK.weapons.svk86, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_457mm_Urban, A.Bottom_Slim_Angled, A.Magazine_10rnd_Fast_Mag, A.Ammo_Hollow_Point, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Top_120_mW_Blue, A.Left_Flashlight] },
+    { weapon: W.DMR_SVDM, name: SK.weapons.svdm, attachments: [A.Muzzle_Long_Suppressor, A.Barrel_565mm_Fluted, A.Bottom_Slim_Angled, A.Magazine_20rnd_Magazine, A.Ammo_Hollow_Point, A.Ergonomic_Improved_Mag_Catch, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Left_Flashlight, A.Right_120_mW_Blue] },
+    { weapon: W.LMG_L110, name: SK.weapons.l110, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_349mm_Fluted, A.Bottom_Slim_Angled, A.Magazine_200rnd_Belt_Box, A.Ammo_Hollow_Point, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Left_Flashlight, A.Right_120_mW_Blue] },
+    { weapon: W.LMG_DRS_IAR, name: SK.weapons.drsiar, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_145_Carbine, A.Bottom_Slim_Angled, A.Magazine_60rnd_Magazine, A.Ammo_Synthetic_Tip, A.Ergonomic_Rail_Cover, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Top_120_mW_Blue, A.Right_Flashlight] },
+    { weapon: W.LMG_M_60, name: SK.weapons.m60, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_17_Fluted, A.Bottom_Slim_Angled, A.Magazine_100rnd_Belt_Pouch, A.Ammo_Hollow_Point, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Left_Flashlight, A.Right_120_mW_Blue] },
+    { weapon: W.LMG_RPKM, name: SK.weapons.rpkm, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_419mm_Boar_F, A.Bottom_Slim_Angled, A.Magazine_75rnd_Drum, A.Ammo_Synthetic_Tip, A.Ergonomic_Magwell_Flare, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Left_Flashlight, A.Right_120_mW_Blue] },
+    { weapon: W.LMG_M123K, name: SK.weapons.m123k, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_370mm_Compact, A.Bottom_Full_Angled, A.Magazine_200rnd_Belt_Box, A.Ammo_Hollow_Point, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Left_Flashlight, A.Right_120_mW_Blue] },
+    { weapon: W.LMG_M250, name: SK.weapons.m250, attachments: [A.Muzzle_CQB_Suppressor, A.Barrel_406mm_Standard, A.Bottom_Slim_Angled, A.Magazine_100rnd_Belt_Pouch, A.Ammo_Hollow_Point, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Top_120_mW_Blue, A.Right_Flashlight] },
+    { weapon: W.LMG_KTS100_MK8, name: SK.weapons.kts100mk8, attachments: [A.Muzzle_CQB_Suppressor, A.Barrel_330mm_Mk3, A.Bottom_Slim_Angled, A.Magazine_100rnd_Drum_Mag, A.Ammo_Synthetic_Tip, A.Ergonomic_Rail_Cover, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Right_Laser_Light_Combo_Green] },
+    { weapon: W.LMG_M240L, name: SK.weapons.m240l, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_20_OH, A.Bottom_Slim_Angled, A.Magazine_100rnd_Belt_Box, A.Ammo_Hollow_Point, A.Ergonomic_Rail_Cover, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Left_Flashlight, A.Right_120_mW_Blue] },
+    { weapon: W.SMG_SGX, name: SK.weapons.sgx, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_45_Compact, A.Bottom_Compact_Handstop, A.Magazine_41rnd_Magazine, A.Ammo_Hollow_Point, A.Scope_Mini_Flex_100x, A.Top_120_mW_Blue, A.Right_Flashlight] },
+    { weapon: W.SMG_PW5A3, name: SK.weapons.pw5a3, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_245mm_Custom, A.Bottom_Compact_Handstop, A.Magazine_40rnd_Magazine, A.Ammo_Synthetic_Tip, A.Ergonomic_Improved_Mag_Catch, A.Scope_Mini_Flex_100x, A.Left_Flashlight, A.Right_120_mW_Blue] },
+    { weapon: W.SMG_PW7A2, name: SK.weapons.pw7a2, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_180mm_Prototype, A.Bottom_Compact_Handstop, A.Magazine_40rnd_Magazine, A.Ammo_Synthetic_Tip, A.Ergonomic_Improved_Mag_Catch, A.Scope_Mini_Flex_100x, A.Left_Flashlight, A.Right_120_mW_Blue] },
+    { weapon: W.SMG_UMG_40, name: SK.weapons.umg40, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_200mm_Fluted, A.Bottom_Compact_Handstop, A.Magazine_36rnd_Magazine, A.Ammo_Synthetic_Tip, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Left_Flashlight, A.Right_120_mW_Blue] },
+    { weapon: W.SMG_USG_90, name: SK.weapons.usg90, attachments: [A.Muzzle_CQB_Suppressor, A.Barrel_264mm_Fluted, A.Bottom_Compact_Handstop, A.Magazine_50rnd_Magazine, A.Ammo_Hollow_Point, A.Ergonomic_Improved_Mag_Catch, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Left_120_mW_Blue, A.Right_Flashlight] },
+    { weapon: W.SMG_KV9, name: SK.weapons.kv9, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_55_Fluted, A.Bottom_Compact_Handstop, A.Magazine_27rnd_Magazine, A.Ammo_Hollow_Point, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Top_120_mW_Blue, A.Right_Flashlight] },
+    { weapon: W.SMG_SCW_10, name: SK.weapons.scw10, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_68_Fluted, A.Bottom_Compact_Handstop, A.Magazine_25rnd_Magazine, A.Ammo_Hollow_Point, A.Ergonomic_Improved_Mag_Catch, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Top_120_mW_Blue, A.Right_Flashlight] },
+    { weapon: W.SMG_SL9, name: SK.weapons.sl9, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_9_Fluted, A.Bottom_Compact_Handstop, A.Magazine_60rnd_Magazine, A.Ammo_Synthetic_Tip, A.Ergonomic_Improved_Mag_Catch, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Right_Laser_Light_Combo_Green] },
+    { weapon: W.Carbine_M4A1, name: SK.weapons.m4a1, attachments: [A.Muzzle_CQB_Suppressor, A.Barrel_125_Fluted, A.Bottom_Slim_Angled, A.Magazine_40rnd_Fast_Mag, A.Ammo_Hollow_Point, A.Ergonomic_Rail_Cover, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Top_120_mW_Blue, A.Right_Flashlight] },
+    { weapon: W.Carbine_M277, name: SK.weapons.m277, attachments: [A.Muzzle_Long_Suppressor, A.Barrel_13_Fluted, A.Bottom_Slim_Angled, A.Magazine_30rnd_Magazine, A.Ammo_Hollow_Point, A.Ergonomic_Magwell_Flare, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Top_120_mW_Blue, A.Right_Flashlight] },
+    { weapon: W.Carbine_AK_205, name: SK.weapons.ak205, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_314mm_Fluted, A.Bottom_Slim_Angled, A.Magazine_50rnd_Magazine, A.Ammo_Synthetic_Tip, A.Ergonomic_Magwell_Flare, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Left_Flashlight, A.Right_120_mW_Blue] },
+    { weapon: W.Carbine_M417_A2, name: SK.weapons.m417a2, attachments: [A.Muzzle_CQB_Suppressor, A.Barrel_12_Assaulter, A.Bottom_Slim_Angled, A.Magazine_25rnd_Magazine, A.Ammo_Hollow_Point, A.Ergonomic_Magwell_Flare, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Top_120_mW_Blue, A.Right_Flashlight] },
+    { weapon: W.Carbine_GRT_BC, name: SK.weapons.grtbc, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_10_Factory, A.Bottom_Compact_Handstop, A.Magazine_45rnd_Fast_Mag, A.Ammo_Hollow_Point, A.Ergonomic_Improved_Mag_Catch, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Right_Laser_Light_Combo_Green] },
+    { weapon: W.Carbine_QBZ_192, name: SK.weapons.qbz192, attachments: [A.Muzzle_Standard_Suppressor, A.Barrel_145_Common, A.Bottom_Slim_Angled, A.Magazine_40rnd_Magazine, A.Ammo_Synthetic_Tip, A.Ergonomic_Rail_Cover, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Top_120_mW_Blue, A.Right_Flashlight] },
+    { weapon: W.Carbine_SG_553R, name: SK.weapons.sg553r, attachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_240mm_Fluted, A.Bottom_Slim_Angled, A.Magazine_40rnd_Fast_Mag, A.Ammo_Hollow_Point, A.Ergonomic_Improved_Mag_Catch, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Left_Flashlight, A.Right_120_mW_Blue] },
 ];
 
 // Custom secondary weapons with predetermined attachments (primary empty)
@@ -686,46 +381,12 @@ interface CustomSecondary {
 }
 
 const CUSTOM_SECONDARY_POOL: CustomSecondary[] = [
-    {
-        weapon: W.Sidearm_ES_57,
-        name: SK.custom.staplegun,
-        attachments: [A.Scope_RO_S_125x, A.Muzzle_CQB_Suppressor, A.Barrel_122mm_Pencil /* ES-57 is the 122mm family */, A.Ergonomic_Improved_Mag_Catch],
-    },
-    {
-        weapon: W.Sidearm_M44,
-        name: SK.custom.grandpasverdict,
-        attachments: [A.Scope_Iron_Sights, A.Barrel_675_Factory /* M44 own family; 65_Extended unverified */, A.Ammo_Hollow_Point],
-    },
-    {
-        weapon: W.Sidearm_M45A1,
-        name: SK.custom.theaccountant,
-        attachments: [
-            A.Scope_R_MR_100x,
-            A.Muzzle_Single_port_Brake,
-            A.Barrel_5_Pencil,
-            A.Magazine_11rnd_Magazine,
-            A.Ergonomic_Improved_Mag_Catch,
-        ],
-    },
-    // ==================== NEW SECONDARY CARDS (2026-07-17) ====================
-    {
-        // GGH-22 — "LUNCH MONEY": quietly taxes anyone who corners you.
-        weapon: W.Sidearm_GGH_22,
-        name: SK.custom.lunchmoney,
-        attachments: [A.Scope_R_MR_100x, A.Muzzle_CQB_Suppressor, A.Barrel_114mm_Pencil, A.Magazine_15rnd_Fast_Mag],
-    },
-    {
-        // M357 — "COURTROOM DRAMA": objection sustained, eight times, via moon clip.
-        weapon: W.Sidearm_M357_Trait,
-        name: SK.custom.courtroomdrama,
-        attachments: [A.Scope_Iron_Sights, A.Barrel_5_Pencil, A.Magazine_8rnd_Moon_Clip, A.Ammo_Hollow_Point],
-    },
-    {
-        // P18 — "GLITTER PEN": writes fast, signs everything, 17 signatures a mag.
-        weapon: W.Sidearm_P18,
-        name: SK.custom.glitterpen,
-        attachments: [A.Scope_R_MR_100x, A.Muzzle_CQB_Suppressor, A.Barrel_39_Pencil, A.Magazine_17rnd_Fast_Mag],
-    },
+    // Gunmaster kitted sidearm builds, real names (GGH-22 has no Gunmaster build — stock only).
+    { weapon: W.Sidearm_P18, name: SK.weapons.p18, attachments: [A.Muzzle_CQB_Suppressor, A.Barrel_39_Pencil, A.Bottom_Laser_Light_Combo_Green, A.Magazine_21rnd_Magazine, A.Ammo_Hollow_Point, A.Ergonomic_Improved_Mag_Catch, A.Scope_Mini_Flex_100x] },
+    { weapon: W.Sidearm_ES_57, name: SK.weapons.es57, attachments: [A.Muzzle_CQB_Suppressor, A.Barrel_122mm_Pencil, A.Bottom_Laser_Light_Combo_Green, A.Magazine_30rnd_Magazine, A.Ammo_Hollow_Point, A.Ergonomic_Improved_Mag_Catch, A.Scope_Mini_Flex_100x] },
+    { weapon: W.Sidearm_M45A1, name: SK.weapons.m45a1, attachments: [A.Muzzle_CQB_Suppressor, A.Barrel_5_Pencil, A.Bottom_Laser_Light_Combo_Green, A.Magazine_11rnd_Magazine, A.Ammo_Hollow_Point, A.Ergonomic_Improved_Mag_Catch, A.Scope_Mini_Flex_100x] },
+    { weapon: W.Sidearm_M44, name: SK.weapons.m44r, attachments: [A.Barrel_837_Long, A.Magazine_6rnd_Speedloader, A.Ammo_Hollow_Point, A.Scope_3VZR_175x] },
+    { weapon: W.Sidearm_M357_Trait, name: SK.weapons.m357, attachments: [A.Barrel_5_Factory, A.Bottom_Laser_Light_Combo_Green, A.Magazine_8rnd_Moon_Clip, A.Ammo_Hollow_Point, A.Scope_Mini_Flex_100x] },
 ];
 
 // Helper to pick random from array (simple random, allows repeats)
@@ -765,278 +426,83 @@ interface SignatureLoadout {
 }
 
 const SIGNATURE_LOADOUTS: SignatureLoadout[] = [
+    // Gunmaster-flavored full kits — real weapon names only.
     {
-        // THE LANDLORD SPECIAL — pump shotgun, a .45 for the paperwork, claymore on the lease line.
-        primary: W.Shotgun_M87A1,
-        primaryAttachments: [A.Scope_Iron_Sights, A.Bottom_Full_Angled, A.Right_50_mW_Green, A.Left_Flashlight],
-        primaryName: SK.custom.thelandlord,
-        secondary: W.Sidearm_M45A1,
-        secondaryAttachments: [A.Scope_R_MR_100x, A.Muzzle_Single_port_Brake, A.Barrel_5_Pencil, A.Magazine_11rnd_Magazine],
-        secondaryName: SK.custom.theaccountant,
-        gadget: G.Misc_Anti_Personnel_Mine,
-        gadgetName: SK.gadgets.claymore,
-        throwable: G.Throwable_Flash_Grenade,
-        throwableName: SK.throwables.flash,
+        // Sniper duel — kitted PSR + suppressed P18.
+        primary: W.Sniper_PSR,
+        primaryAttachments: [A.Muzzle_CQB_Suppressor, A.Barrel_27_MK22, A.Bottom_Classic_Grip_Pod, A.Magazine_10rnd_Magazine, A.Ammo_Tungsten_Core, A.Ergonomic_DLC_Bolt, A.Scope_1p88_Variable, A.Scope_Anti_Glare_Coating, A.Top_120_mW_Blue, A.Left_Range_Finder],
+        primaryName: SK.weapons.psr,
+        secondary: W.Sidearm_P18,
+        secondaryAttachments: [A.Muzzle_CQB_Suppressor, A.Barrel_39_Pencil, A.Bottom_Laser_Light_Combo_Green, A.Magazine_21rnd_Magazine, A.Ammo_Hollow_Point, A.Ergonomic_Improved_Mag_Catch, A.Scope_Mini_Flex_100x],
+        secondaryName: SK.weapons.p18,
+        gadget: G.Misc_Tracer_Dart,
+        gadgetName: SK.gadgets.tracer_dart,
+        throwable: G.Throwable_Smoke_Grenade,
+        throwableName: SK.throwables.smoke,
     },
     {
-        // PIZZA RUSH — SL9 and a stim: 30 minutes or it's free. No secondary, no brakes.
-        primary: W.SMG_SL9,
-        primaryAttachments: [A.Scope_Aperture_Sight, A.Muzzle_CQB_Suppressor, A.Barrel_11_Heavy, A.Magazine_30rnd_Fast_Mag],
-        primaryName: SK.custom.pizzarush,
-        secondary: null,
-        secondaryName: SK.throwables.none,
+        // Pistol duel — scoped M44 hand cannon only, knife to finish.
+        primary: null,
+        primaryName: SK.throwables.none,
+        secondary: W.Sidearm_M44,
+        secondaryAttachments: [A.Barrel_837_Long, A.Magazine_6rnd_Speedloader, A.Ammo_Hollow_Point, A.Scope_3VZR_175x],
+        secondaryName: SK.weapons.m44r,
         gadget: G.Class_Adrenaline_Injector,
         gadgetName: SK.gadgets.stim,
         throwable: G.Throwable_Throwing_Knife,
         throwableName: SK.throwables.throwing_knife,
     },
     {
-        // DEMOLITION DAY — double-barrel diplomacy, C4 negotiations, revolver appeals court.
-        primary: W.Shotgun_DB_12,
-        primaryAttachments: [A.Scope_Iron_Sights, A.Bottom_Full_Angled, A.Right_50_mW_Green],
-        primaryName: SK.custom.hallwaylawyer,
-        secondary: W.Sidearm_M357_Trait,
-        secondaryAttachments: [A.Scope_Iron_Sights, A.Barrel_5_Pencil, A.Magazine_8rnd_Moon_Clip, A.Ammo_Hollow_Point],
-        secondaryName: SK.custom.courtroomdrama,
+        // Shotgun rush — slug 185KS-K + kitted M45A1.
+        primary: W.Shotgun__185KS_K,
+        primaryAttachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_430mm_Cut, A.Bottom_Slim_Angled, A.Magazine_8rnd_Fast_Mag, A.Ammo_Slugs, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Left_Flashlight, A.Right_120_mW_Blue],
+        primaryName: SK.weapons['185ksk'],
+        secondary: W.Sidearm_M45A1,
+        secondaryAttachments: [A.Muzzle_CQB_Suppressor, A.Barrel_5_Pencil, A.Bottom_Laser_Light_Combo_Green, A.Magazine_11rnd_Magazine, A.Ammo_Hollow_Point, A.Ergonomic_Improved_Mag_Catch, A.Scope_Mini_Flex_100x],
+        secondaryName: SK.weapons.m45a1,
         gadget: G.Misc_Demolition_Charge,
         gadgetName: SK.gadgets.c4,
-        throwable: G.Throwable_Mini_Frag_Grenade,
-        throwableName: SK.throwables.mini_frag,
+        throwable: G.Throwable_Flash_Grenade,
+        throwableName: SK.throwables.flash,
     },
     {
-        // WALL STREET — long positions only. Tag them, short them, collect.
-        primary: W.Sniper_M2010_ESR,
-        primaryAttachments: [
-            A.Scope_TS_HD_600x,
-            A.Scope_Canted_Iron_Sights,
-            A.Muzzle_Long_Suppressor,
-            A.Barrel_24_Fluted,
-            A.Magazine_5rnd_Fast_Mag,
-            A.Left_Range_Finder,
-        ],
-        primaryName: SK.custom.taxseason,
-        secondary: W.Sidearm_GGH_22,
-        secondaryAttachments: [A.Scope_R_MR_100x, A.Muzzle_CQB_Suppressor, A.Barrel_114mm_Pencil, A.Magazine_15rnd_Fast_Mag],
-        secondaryName: SK.custom.lunchmoney,
-        gadget: G.Misc_Tracer_Dart,
-        gadgetName: SK.gadgets.tracer_dart,
-        throwable: G.Throwable_Smoke_Grenade,
-        throwableName: SK.throwables.smoke,
-    },
-    {
-        // SILENT AUCTION — everything suppressed. Highest bidder hears nothing.
-        primary: W.SMG_UMG_40,
-        primaryAttachments: [
-            A.Scope_Aperture_Sight,
-            A.Muzzle_CQB_Suppressor,
-            A.Barrel_200mm_Fluted,
-            A.Magazine_25rnd_Fast_Mag,
-            A.Ammo_Hollow_Point,
-        ],
-        primaryName: SK.custom.officememo,
+        // LMG hold — kitted M250 + ES-57.
+        primary: W.LMG_M250,
+        primaryAttachments: [A.Muzzle_CQB_Suppressor, A.Barrel_406mm_Standard, A.Bottom_Slim_Angled, A.Magazine_100rnd_Belt_Pouch, A.Ammo_Hollow_Point, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Top_120_mW_Blue, A.Right_Flashlight],
+        primaryName: SK.weapons.m250,
         secondary: W.Sidearm_ES_57,
-        secondaryAttachments: [A.Scope_RO_S_125x, A.Muzzle_CQB_Suppressor, A.Barrel_122mm_Pencil],
-        secondaryName: SK.custom.staplegun,
+        secondaryAttachments: [A.Muzzle_CQB_Suppressor, A.Barrel_122mm_Pencil, A.Bottom_Laser_Light_Combo_Green, A.Magazine_30rnd_Magazine, A.Ammo_Hollow_Point, A.Ergonomic_Improved_Mag_Catch, A.Scope_Mini_Flex_100x],
+        secondaryName: SK.weapons.es57,
         gadget: G.Misc_Anti_Personnel_Mine,
         gadgetName: SK.gadgets.claymore,
-        throwable: G.Throwable_Smoke_Grenade,
-        throwableName: SK.throwables.smoke,
-    },
-    {
-        // COMPANY PICNIC — the M60 brings the potato salad, EOD bot brings the frisbee.
-        primary: W.LMG_M_60,
-        primaryAttachments: [
-            A.Scope_RO_S_125x,
-            A.Muzzle_Compensated_Brake,
-            A.Barrel_17_Cut,
-            A.Magazine_50rnd_Loose_Belt,
-            A.Bottom_Bipod,
-        ],
-        primaryName: SK.custom.companypicnic,
-        secondary: W.Sidearm_P18,
-        secondaryAttachments: [A.Scope_R_MR_100x, A.Muzzle_CQB_Suppressor, A.Barrel_39_Pencil, A.Magazine_17rnd_Fast_Mag],
-        secondaryName: SK.custom.glitterpen,
-        gadget: G.Deployable_EOD_Bot,
-        gadgetName: SK.gadgets.eod_bot,
         throwable: G.Throwable_Incendiary_Grenade,
         throwableName: SK.throwables.incendiary,
     },
     {
-        // TOURNAMENT LEGAL — the ref checked everything. Twice. Win on fundamentals.
-        primary: W.Carbine_M4A1,
-        primaryAttachments: [
-            A.Scope_R_MR_100x,
-            A.Muzzle_Linear_Comp,
-            A.Barrel_145_Carbine,
-            A.Magazine_20rnd_Fast_Mag,
-            A.Bottom_Low_Profile_Stubby,
-        ],
-        primaryName: SK.custom.standardissue,
-        secondary: W.Sidearm_P18,
-        secondaryAttachments: [A.Scope_R_MR_100x, A.Barrel_39_Factory, A.Magazine_17rnd_Fast_Mag],
-        secondaryName: SK.custom.glitterpen,
-        gadget: G.Class_Adrenaline_Injector,
-        gadgetName: SK.gadgets.stim,
-        throwable: G.Throwable_Flash_Grenade,
-        throwableName: SK.throwables.flash,
-    },
-    {
-        // BRITISH BREAKFAST — a full English: bullpup, revolver, drone surveillance, mild stun.
-        primary: W.AssaultRifle_L85A3,
-        primaryAttachments: [
-            A.Scope_SU_123_150x,
-            A.Muzzle_Standard_Suppressor,
-            A.Barrel_518mm_Fluted,
-            A.Magazine_20rnd_Fast_Mag,
-        ],
-        primaryName: SK.custom.thequeue,
-        secondary: W.Sidearm_M44,
-        secondaryAttachments: [A.Scope_Iron_Sights, A.Barrel_675_Factory, A.Ammo_Hollow_Point],
-        secondaryName: SK.custom.grandpasverdict,
-        gadget: G.Deployable_Recon_Drone,
-        gadgetName: SK.gadgets.recon_drone,
-        throwable: G.Throwable_Stun_Grenade,
-        throwableName: SK.throwables.stun,
-    },
-    // -------- PISTOL-ONLY kits (primary: null -> apply strips the primary; knife stays) --------
-    {
-        // HIGH NOON — six rounds, one street, no witnesses. Draw.
-        primary: null,
-        primaryName: SK.throwables.none,
-        secondary: W.Sidearm_M44,
-        secondaryAttachments: [A.Scope_Iron_Sights, A.Barrel_675_Factory, A.Ammo_Match_Grade],
-        secondaryName: SK.custom.highnoon,
-        gadget: G.Class_Adrenaline_Injector,
-        gadgetName: SK.gadgets.stim,
-        throwable: G.Throwable_Throwing_Knife,
-        throwableName: SK.throwables.throwing_knife,
-    },
-    {
-        // THE PENCIL — a suppressed P18 and terrible focus. Yeah... a pencil.
-        primary: null,
-        primaryName: SK.throwables.none,
-        secondary: W.Sidearm_P18,
-        secondaryAttachments: [A.Scope_R_MR_100x, A.Muzzle_CQB_Suppressor, A.Barrel_39_Pencil, A.Magazine_17rnd_Fast_Mag],
-        secondaryName: SK.custom.thepencil,
-        gadget: G.Class_Adrenaline_Injector,
-        gadgetName: SK.gadgets.stim,
-        throwable: G.Throwable_Flash_Grenade,
-        throwableName: SK.throwables.flash,
-    },
-    {
-        // BACKUP PLAN — the plan IS the backup. Claymore the door, tax the entry.
-        primary: null,
-        primaryName: SK.throwables.none,
-        secondary: W.Sidearm_GGH_22,
-        secondaryAttachments: [A.Scope_R_MR_100x, A.Muzzle_CQB_Suppressor, A.Barrel_114mm_Pencil, A.Magazine_15rnd_Fast_Mag],
-        secondaryName: SK.custom.backupplan,
-        gadget: G.Misc_Anti_Personnel_Mine,
-        gadgetName: SK.gadgets.claymore,
-        throwable: G.Throwable_Smoke_Grenade,
-        throwableName: SK.throwables.smoke,
-    },
-    {
-        // DOUBLE JEOPARDY — same defendant, eight more charges, moon-clip reloads.
-        primary: null,
-        primaryName: SK.throwables.none,
-        secondary: W.Sidearm_M357_Trait,
-        secondaryAttachments: [A.Scope_Iron_Sights, A.Barrel_5_Pencil, A.Magazine_8rnd_Moon_Clip, A.Ammo_Hollow_Point],
-        secondaryName: SK.custom.doublejeopardy,
-        gadget: G.Class_Adrenaline_Injector,
-        gadgetName: SK.gadgets.stim,
-        throwable: G.Throwable_Mini_Frag_Grenade,
-        throwableName: SK.throwables.mini_frag,
-    },
-    {
-        // SPACE PROGRAM — the space gun, drone recon, and one small stun for mankind.
-        primary: null,
-        primaryName: SK.throwables.none,
-        secondary: W.Sidearm_ES_57,
-        secondaryAttachments: [A.Scope_RO_S_125x, A.Muzzle_CQB_Suppressor, A.Barrel_122mm_Pencil, A.Magazine_20rnd_Fast_Mag],
-        secondaryName: SK.custom.spaceprogram,
-        gadget: G.Deployable_Recon_Drone,
-        gadgetName: SK.gadgets.recon_drone,
-        throwable: G.Throwable_Stun_Grenade,
-        throwableName: SK.throwables.stun,
-    },
-    {
-        // LAST RESORT — a .45, a tracer, and a fire. Checkout is at noon.
-        primary: null,
-        primaryName: SK.throwables.none,
-        secondary: W.Sidearm_M45A1,
-        secondaryAttachments: [A.Scope_R_MR_100x, A.Muzzle_Single_port_Brake, A.Barrel_5_Pencil, A.Magazine_11rnd_Magazine],
-        secondaryName: SK.custom.lastresort,
-        gadget: G.Misc_Tracer_Dart,
-        gadgetName: SK.gadgets.tracer_dart,
-        throwable: G.Throwable_Incendiary_Grenade,
-        throwableName: SK.throwables.incendiary,
-    },
-    // -------- PRIMARY-ONLY kits (secondary: null — one gun, no fallback) --------
-    {
-        // NOTHING PERSONAL — a suppressed bolt gun and nothing to fall back on. Make it count.
-        primary: W.Sniper_SV_98,
-        primaryAttachments: [
-            A.Scope_TS_HD_600x,
-            A.Scope_Canted_Iron_Sights,
-            A.Muzzle_Long_Suppressor,
-            A.Barrel_650mm_Fluted,
-            A.Magazine_10rnd_Magazine,
-        ],
-        primaryName: SK.custom.nothingpersonal,
-        secondary: null,
-        secondaryName: SK.throwables.none,
-        gadget: G.Class_Adrenaline_Injector,
-        gadgetName: SK.gadgets.stim,
-        throwable: G.Throwable_Throwing_Knife,
-        throwableName: SK.throwables.throwing_knife,
-    },
-    {
-        // THE BAILIFF — order in the court. Pump, flash, repeat until compliant.
-        primary: W.Shotgun_M87A1,
-        primaryAttachments: [A.Scope_Iron_Sights, A.Bottom_Full_Angled, A.Left_Flashlight],
-        primaryName: SK.custom.thebailiff,
-        secondary: null,
-        secondaryName: SK.throwables.none,
-        gadget: G.Class_Adrenaline_Injector,
-        gadgetName: SK.gadgets.stim,
-        throwable: G.Throwable_Flash_Grenade,
-        throwableName: SK.throwables.flash,
-    },
-    {
-        // CARDIO DAY — an SGX, a stim, and absolutely no plan B. Keep moving.
+        // SMG rush — kitted SGX + M357 moon clip.
         primary: W.SMG_SGX,
-        primaryAttachments: [
-            A.Scope_Aperture_Sight,
-            A.Muzzle_CQB_Suppressor,
-            A.Barrel_6_Fluted,
-            A.Magazine_30rnd_Fast_Mag,
-            A.Ammo_Hollow_Point,
-        ],
-        primaryName: SK.custom.cardioday,
-        secondary: null,
-        secondaryName: SK.throwables.none,
+        primaryAttachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_45_Compact, A.Bottom_Compact_Handstop, A.Magazine_41rnd_Magazine, A.Ammo_Hollow_Point, A.Scope_Mini_Flex_100x, A.Top_120_mW_Blue, A.Right_Flashlight],
+        primaryName: SK.weapons.sgx,
+        secondary: W.Sidearm_M357_Trait,
+        secondaryAttachments: [A.Barrel_5_Factory, A.Bottom_Laser_Light_Combo_Green, A.Magazine_8rnd_Moon_Clip, A.Ammo_Hollow_Point, A.Scope_Mini_Flex_100x],
+        secondaryName: SK.weapons.m357,
         gadget: G.Class_Adrenaline_Injector,
         gadgetName: SK.gadgets.stim,
-        throwable: G.Throwable_Smoke_Grenade,
-        throwableName: SK.throwables.smoke,
-    },
-    {
-        // ANGER MANAGEMENT — 100 rounds of unresolved feelings. Therapy is Tuesday.
-        primary: W.LMG_M123K,
-        primaryAttachments: [
-            A.Scope_SU_123_150x,
-            A.Muzzle_Double_port_Brake,
-            A.Barrel_612mm_VMW,
-            A.Magazine_100rnd_Belt_Pouch,
-            A.Bottom_Bipod,
-        ],
-        primaryName: SK.custom.angermanagement,
-        secondary: null,
-        secondaryName: SK.throwables.none,
-        gadget: G.Misc_Demolition_Charge,
-        gadgetName: SK.gadgets.c4,
         throwable: G.Throwable_Mini_Frag_Grenade,
         throwableName: SK.throwables.mini_frag,
+    },
+    {
+        // DMR mid-range — kitted SVK-86 + P18.
+        primary: W.DMR_SVK_86,
+        primaryAttachments: [A.Muzzle_Lightened_Suppressor, A.Barrel_457mm_Urban, A.Bottom_Slim_Angled, A.Magazine_10rnd_Fast_Mag, A.Ammo_Hollow_Point, A.Scope_Mini_Flex_100x, A.Scope_Canted_Iron_Sights, A.Top_120_mW_Blue, A.Left_Flashlight],
+        primaryName: SK.weapons.svk86,
+        secondary: W.Sidearm_P18,
+        secondaryAttachments: [A.Muzzle_CQB_Suppressor, A.Barrel_39_Pencil, A.Bottom_Laser_Light_Combo_Green, A.Magazine_21rnd_Magazine, A.Ammo_Hollow_Point, A.Ergonomic_Improved_Mag_Catch, A.Scope_Mini_Flex_100x],
+        secondaryName: SK.weapons.p18,
+        gadget: G.Deployable_Recon_Drone,
+        gadgetName: SK.gadgets.recon_drone,
+        throwable: G.Throwable_Stun_Grenade,
+        throwableName: SK.throwables.stun,
     },
 ];
 let remainingSignatures: SignatureLoadout[] = [];

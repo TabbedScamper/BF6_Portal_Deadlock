@@ -37,7 +37,12 @@ const pending = new Map<number, Pending>(); // botId -> in-flight ray
 // just saw you keeps pressuring your last position for a moment after you break cover.
 const LOS_TTL_MS = 2000;
 const HEAD_HEIGHT = 1.5; // eyes/chest height above the root position
-const EYE_FORWARD = 0.9; // push the ray start forward so it clears the caster's own collider
+// Push the ray START forward so it clears the caster's OWN ~0.3-0.4m capsule (a ray from
+// dead-center would hit the bot itself and read every target as "blocked"). But NO further:
+// at 0.9m a wall-hugging bot's ray began on the FAR side of a hugged wall -> false "clear"
+// -> it shot enemies through solid geometry. 0.5m just clears the capsule. Tune 0.4-0.6.
+// (Ported from FFA-Gunmaster — the "bots shoot through walls at close range" fix.)
+const EYE_FORWARD = 0.5;
 const CHEST_HEIGHT = 1.0; // aim at the enemy's chest, not their feet
 const NEAR_FRAC = 0.85; // a hit past 85% of the way to the target = reached target = clear LOS
 

@@ -44,6 +44,11 @@ export const SENSOR_CONFIG = {
     FLAG_TTL: 500, // Flag memory refresh rate
     FLAG_URGENCY_BASE: 0.3, // Base urgency when flag spawns
     FLAG_URGENCY_MAX: 1.0, // Max urgency (time running out)
+    // OVERTIME AGGRESSION: at/above this urgency the flag outranks everything — every bot
+    // commits to the point, ignores the ally-is-capturing "provide cover" branch, sprints
+    // the approach, and won't peel off to fight a distant enemy. Overtime is a race, not a
+    // firefight: sitting off-point trading shots loses the round.
+    FLAG_URGENCY_ALL_IN: 0.55,
 };
 
 /**
@@ -390,14 +395,16 @@ export function shouldBotPushFlag(bot: mod.Player, memory: BotMemory, ctx: FlagC
         return true;
     }
 
+    // OVERTIME ALL-IN: once urgency crosses the threshold EVERY bot commits, before any
+    // of the situational branches below. Checked ahead of the ally-on-flag branch on
+    // purpose — late in overtime a lone capturer needs bodies on the point, not a cordon.
+    if (ctx.urgency >= SENSOR_CONFIG.FLAG_URGENCY_ALL_IN) {
+        return true;
+    }
+
     // If ally is already on flag and no enemies nearby, provide cover instead
     if (ctx.allyOnFlag && ctx.closestEnemyToFlag > SENSOR_CONFIG.FLAG_ENGAGE_RADIUS) {
         return false;
-    }
-
-    // High urgency (time running out) - everyone pushes
-    if (ctx.urgency > 0.7) {
-        return true;
     }
 
     // Numbers advantage - be aggressive

@@ -8,3 +8,4 @@ package-lock.json
 extension/build
 PortalLog.txt
 Portal-Logs.lnk
+.claude/

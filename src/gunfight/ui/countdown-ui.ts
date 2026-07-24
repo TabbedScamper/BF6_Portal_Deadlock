@@ -1,10 +1,27 @@
+// ============================================================================
+// COUNTDOWN UI — round-start countdown + the countdown→live handoff
+// ============================================================================
+// This class does MORE than draw a countdown (its outsized responsibility is why
+// it's the second-biggest file). On start() it: teleports every player to their
+// team spawn seat (spatial ObjIds 1-4), FREEZES them + locks inputs, EQUIPS the
+// round's shared loadout, spaces/relocates bots, and creates each player's
+// TeamHealthUI. At countdown END it hands control to the live round — the caller's
+// handleCountdownEnd() flips SpawnMode to Spectating and activates bots.
+//
+// WHY the guards: the freeze loop runs every ~50ms; if it lets a native throw on a
+// dead/invalid player, the engine stack-dumps to PortalLog every tick = real lag —
+// so invalid/dead players are pruned from the freeze list (see the IsPlayerValid/
+// IsAlive checks). Spawn-mode ordering here is part of the SPECTATE-FLOW.md dance;
+// don't reorder it without reading that doc. See ARCHITECTURE.md §2 for the flow.
+// ============================================================================
 import { Timers } from 'bf6-portal-utils/timers/index.ts';
 import { sfxVol } from '../../config.ts';
 import { UIContainer } from 'bf6-portal-utils/ui/components/container/index.ts';
 import { UIText } from 'bf6-portal-utils/ui/components/text/index.ts';
 import { LoadoutUI, type Loadout } from './loadout-ui.ts';
 import { TeamHealthUI } from './team-health-ui.ts';
-import { playVO, getCurrentRoundNumber } from '../../index.ts';
+import { playVO, getCurrentRoundNumber, ensureLiveSpawnMode } from '../../index.ts';
+import { spec, specState } from '../../spectate-track.ts';
 
 // ========== DEBUG LOGGING ==========
 const DEBUG_COUNTDOWN = false;
@@ -265,8 +282,10 @@ export class CountdownUI {
         this._isRunning = true;
         this._container.visible = true;
 
-        // Set spawn mode to auto spawn during countdown
-        mod.SetSpawnMode(mod.SpawnModes.AutoSpawn);
+        // BUILD F: do NOT touch the spawn mode here. Round 1 inherits AutoSpawn from match
+        // start; round 2+ inherits Deploy set at the round transition — the mode must hold
+        // until the countdown-end flip to Spectating.
+        spec('MODE', 'inherited (countdown start; no SetSpawnMode)');
 
         // Combine teams for freezing
         const allPlayers = [...(team1 ?? []), ...(team2 ?? [])];
@@ -381,8 +400,12 @@ export class CountdownUI {
             }
         }
 
-        // Set spawn mode to spectating after countdown
-        mod.SetSpawnMode(mod.SpawnModes.Spectating);
+        // BUILD G: the live Spectating mode was already set during the round transition (at
+        // the moment everyone was deployed and zero spectator sessions existed), so for
+        // rounds 2+ this is a guarded NO-OP — the suspect countdown-end Spectating flip
+        // never fires again. Round 1 (match start, no spectate history) sets it here.
+        ensureLiveSpawnMode('countdown end');
+        specState('go-live');
 
         // Stop position enforcement and unfreeze players after countdown
         this._stopPositionEnforcement();
@@ -818,6 +841,11 @@ export class CountdownUI {
                 } else {
                     // For human players: explicitly set each blocked input
                     // This is more reliable than EnableAllInputRestrictions
+                    // Skip players without a live soldier: EnableInputRestriction throws
+                    // InvalidPlayer on them, and every NATIVE throw dumps a ~15-line stack
+                    // into PortalLog even when caught here — enough volume to lag the game.
+                    if (!mod.IsPlayerValid(player)) continue;
+                    if (!mod.GetSoldierState(player, mod.SoldierStateBool.IsAlive)) continue;
                     for (const input of BLOCKED_INPUTS) {
                         mod.EnableInputRestriction(player, input, restrict);
                     }
@@ -1085,8 +1113,17 @@ export class CountdownUI {
             const humans: mod.Player[] = [];
             const bots: mod.Player[] = [];
 
+            // LAG FIX: prune players without a live soldier (left / unspawned / undeployed)
+            // from the frozen list instead of restricting them. At 50ms x BLOCKED_INPUTS,
+            // one stale entry made EnableInputRestriction throw InvalidPlayer ~120x/sec,
+            // and every native throw stack-dumps into PortalLog — 28k log lines in one
+            // match, enough I/O to lag players hard.
+            const stillFrozen: mod.Player[] = [];
             for (const player of this._frozenPlayers) {
                 try {
+                    if (!mod.IsPlayerValid(player)) continue; // dropped from list
+                    if (!mod.GetSoldierState(player, mod.SoldierStateBool.IsAlive)) continue;
+                    stillFrozen.push(player);
                     const isAI = mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier);
 
                     if (isAI) {
@@ -1107,6 +1144,7 @@ export class CountdownUI {
                     // Player might be invalid
                 }
             }
+            this._frozenPlayers = stillFrozen;
 
             // Log every 1 second (20 ticks at 50ms)
             if (_posEnforcementTicks % 20 === 0) {

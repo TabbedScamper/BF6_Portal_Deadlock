@@ -41,6 +41,7 @@ export {
     BotBrain,
     getBotBrain,
     removeBotBrain,
+    removeBotBrainById,
     resetBotBrain,
     clearAllBotBrains,
     getBotBrainCount,

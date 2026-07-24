@@ -1,3 +1,42 @@
+// ============================================================================
+// DEADLOCK — ENTRY POINT (round-based MW2019-style Gunfight for BF6 Portal)
+// ============================================================================
+// Two small teams; each round hands EVERYONE the same rotating loadout and the
+// first team to eliminate the other (or capture the overtime flag) wins the
+// round. First to the round target wins the match. Built on the deluca-mike
+// TypeScript scripting template.
+//
+//   Build:  npm run build   (bf6-portal-bundler -> dist/bundle.ts + .strings.json)
+//   Deploy: npm run deploy   ·   Typecheck gate: npx tsc --noEmit (bundler does NOT typecheck)
+//
+// This file is the SPINE: it subscribes every Events.* handler, owns the round
+// lifecycle + the (tricky) live-spectate choreography, seats humans/bots onto
+// teams, and wires the UI/bot/telemetry subsystems together. New here? Read
+// ARCHITECTURE.md first, then follow OnGameModeStarted top-to-bottom.
+//
+// CONTENTS (each is a "// ===" banner below — Ctrl-F the title to jump):
+//   • DEBUG LOGGING ...................... [MAIN] counters, all gated by DEBUG_MAIN
+//   • TEAM BALANCING / CUSTOM BOT CONFIG . the tunables (ENABLE_CUSTOM_BOTS, cadences)
+//   • CUSTOM BOT SYSTEM (Backfill) ....... count humans/team, undeploy a bot to seat a human
+//   • DYNAMIC TEAM SIZING + RULE-1 ....... true-1v1..4v4 scaling (see TEAM-SORTING-SPEC.md)
+//   • RayCast LOS handlers ............... OnRayCastHit/Missed -> bot-ai/los.ts
+//   • MATCH END CLEANUP .................. stop every loop/UI before EndGameMode
+//   • OnGameModeStarted ................. THE ROUND LOOP + live-spectate choreography
+//                                          (the big one; see SPECTATE-FLOW.md)
+//   • Kill/death handlers ............... OnPlayerDied / OnMandown / OnPlayerEarnedKill
+//   • DAMAGE & ASSIST TRACKING .......... per-player damage ledger -> assists on kill
+//   • Deploy / damage / undeploy ........ per-player deploy wiring + retaliate hook
+//   • DEATH ZONE AREA TRIGGERS .......... instant-kill trigger volumes (IDs 10-20)
+//   • Admin debug tool + join/leave ..... F-key debug tool wiring, roster join/leave
+//   • handlePlayerDeployed .............. bot<->identity association, weapon/HUD per deploy
+//
+// TWO SEPARATE BOT SWITCHES — do NOT conflate them:
+//   ENABLE_CUSTOM_BOTS (below)      = the named-bot BACKFILL (keep TRUE: it puts an
+//                                     opponent on the enemy team so a solo human gets a 1v1).
+//   DEBUG_MODE (config.ts)          = a forced FULL bot lobby for solo testing + all
+//                                     [EVT]/[TLM] telemetry. Keep FALSE for release.
+// ============================================================================
+
 import { Events } from 'bf6-portal-utils/events/index.ts';
 import { Timers } from 'bf6-portal-utils/timers/index.ts';
 import { MultiClickDetector } from 'bf6-portal-utils/multi-click-detector/index.ts';
@@ -5,7 +44,7 @@ import { MapDetector } from 'bf6-portal-utils/map-detector/index.ts';
 import { Vectors } from 'bf6-portal-utils/vectors/index.ts';
 
 import { DebugTool } from './debug-tool/index.ts';
-import { PLAYERS_PER_TEAM, DEBUG_MODE, DEBUG_TEAM_SIZE , sfxVol } from './config.ts';
+import { PLAYERS_PER_TEAM, MIN_TEAM_SIZE, LIVE_SPECTATE, DEBUG_MODE, DEBUG_TEAM_SIZE , sfxVol } from './config.ts';
 import {
     getPlayerStateVectorString,
     getPlayersOnTeam,
@@ -17,10 +56,11 @@ import {
 } from './helpers/index.ts';
 
 // Bot AI system - realistic awareness without omniscience
-import { getBotBrain, resetBotBrain, clearAllBotBrains, tickAllBotBrains, logBrainStats } from './bot-ai/index.ts';
+import { getBotBrain, resetBotBrain, removeBotBrainById, clearAllBotBrains, tickAllBotBrains, logBrainStats } from './bot-ai/index.ts';
 import { getRandomLoadout } from './gunfight/loadout.ts';
 import { associateBotWithIdentity, deactivateBotIdentity, getAvailableBotIdentity, getBotIdentityByPlayerId, getPlayerStats, initScoreboard, randomizeBotNames, resetBotIdentitiesForRound, updateScoreboard , knownBotIds, setRosterLogger } from './roster.ts';
 import type { BotIdentity, PlayerStats } from './roster.ts';
+import { spec, specState, specDeath, specDeploy, specUndeploy, specFlush, specInit, specStop } from './spectate-track.ts';
 
 // Structured telemetry -> PortalLog (the "MCP-like" live view). See telemetry/index.ts.
 import { Tlm, startPerfHeartbeat } from './telemetry/index.ts';
@@ -84,7 +124,10 @@ const PRODUCTION_MODE = true;
 // ============================================================================
 // CUSTOM BOT CONFIGURATION
 // ============================================================================
-// Enable/disable custom backfill bots (set to false to use Portal default bots)
+// Enable/disable custom backfill bots (set to false to use Portal default bots).
+// ON in release: bots fill each team up to the HUMAN count (computeTargetTeamSize), so a
+// solo player gets a 1v1 vs one bot and a full 4v4 lobby gets none. The debug FORCED full
+// lobby is a separate switch — that's DEBUG_MODE/DEBUG_TEAM_SIZE in config.ts, now off.
 const ENABLE_CUSTOM_BOTS = true;
 // PLAYERS_PER_TEAM is imported from config.ts (change it there)
 // Targeting update interval (every 500ms for more responsive bots)
@@ -288,8 +331,39 @@ function spawnCustomBot(teamId: number, position: mod.Vector): BotIdentity | nul
     }
 }
 
-// Track pending bot identities to associate after spawn
-let pendingBotIdentities: BotIdentity[] = [];
+// Pending bot-identity associations, keyed by the spawner POSITION each bot was spawned
+// at. Bots are matched to their identity by nearest-position AT FIRST DEPLOY (each bot
+// materializes standing at its own spawner; batch-mates' spawners are >=1m away), NOT by
+// "first unassociated bot on the team" — that fuzzy matching could cross-wire identities
+// within a spawn batch, so a death freed the WRONG identity's name and the next backfill
+// spawned a bot with a name still ALIVE on the same team (duplicate names).
+let pendingBotAssoc: { identity: BotIdentity; position: mod.Vector }[] = [];
+
+// Match a freshly deployed bot to its pending identity by spawn position. Called from
+// handlePlayerDeployed the moment the bot materializes.
+function associateBotByPosition(bot: mod.Player): void {
+    if (pendingBotAssoc.length === 0) return;
+    try {
+        const botId = mod.GetObjId(bot);
+        if (getBotIdentityByPlayerId(botId)) return; // already bound
+        const teamId = mod.GetObjId(mod.GetTeam(bot));
+        const pos = mod.GetSoldierState(bot, mod.SoldierStateVector.GetPosition);
+        let bestIdx = -1;
+        let bestDist = 6; // must be within 6m of a pending spawner to count as a match
+        for (let i = 0; i < pendingBotAssoc.length; i++) {
+            if (pendingBotAssoc[i].identity.teamId !== teamId) continue;
+            const d = mod.DistanceBetween(pos, pendingBotAssoc[i].position);
+            if (d < bestDist) {
+                bestDist = d;
+                bestIdx = i;
+            }
+        }
+        if (bestIdx >= 0) {
+            const entry = pendingBotAssoc.splice(bestIdx, 1)[0];
+            associateBotWithIdentity(bot, entry.identity);
+        }
+    } catch {}
+}
 
 // Spawn bots to fill all empty slots on both teams
 function spawnBackfillBots(): void {
@@ -315,50 +389,55 @@ function spawnBackfillBots(): void {
 
     adminDebugTool?.dynamicLog(`Backfill: Team1 has ${team1Humans} humans, needs ${team1BotsNeeded} bots`);
     adminDebugTool?.dynamicLog(`Backfill: Team2 has ${team2Humans} humans, needs ${team2BotsNeeded} bots`);
+    spec('BACKFILL', `target=${targetSize}/team t1=${team1Humans}h+${team1BotsNeeded}bot t2=${team2Humans}h+${team2BotsNeeded}bot`);
 
-    // Clear pending identities
-    pendingBotIdentities = [];
-
-    // Spawn bots for team 1 and track identities
+    // Spawn bots for team 1 and queue their position-keyed associations. NOTE: pending
+    // entries are APPENDED, never cleared here — a second backfill can run while the
+    // first batch is still deploying (mid-countdown reconcile), and clearing would
+    // orphan the in-flight bots' identities.
+    let spawnedNow = 0;
     for (let i = 0; i < team1BotsNeeded && i < team1Positions.length; i++) {
         const identity = spawnCustomBot(1, team1Positions[i]);
         if (identity) {
-            pendingBotIdentities.push(identity);
+            pendingBotAssoc.push({ identity, position: team1Positions[i] });
+            spawnedNow++;
         }
     }
 
-    // Spawn bots for team 2 and track identities
+    // Spawn bots for team 2 and queue their position-keyed associations
     for (let i = 0; i < team2BotsNeeded && i < team2Positions.length; i++) {
         const identity = spawnCustomBot(2, team2Positions[i]);
         if (identity) {
-            pendingBotIdentities.push(identity);
+            pendingBotAssoc.push({ identity, position: team2Positions[i] });
+            spawnedNow++;
         }
     }
 
-    // Associate bots with identities after a short delay (bots spawn asynchronously)
-    if (pendingBotIdentities.length > 0) {
+    // Fallback sweep: nearly all bots bind at their deploy via associateBotByPosition;
+    // anything still pending after 1.5s gets a best-effort team match, then pending clears.
+    if (spawnedNow > 0) {
         Timers.setTimeout(() => {
             associatePendingBots();
-        }, 500);
+        }, 1500);
     }
 
-    adminDebugTool?.dynamicLog(`Backfill: spawned ${pendingBotIdentities.length} bots`);
+    adminDebugTool?.dynamicLog(`Backfill: spawned ${spawnedNow} bots`);
 }
 
-// Associate pending bot identities with spawned bots
+// FALLBACK association for bots that somehow deployed without a position match (e.g. the
+// countdown teleported them before their deploy event processed). Best-effort by team.
 function associatePendingBots(): void {
-    for (const identity of pendingBotIdentities) {
-        const bots = getBotsOnTeam(identity.teamId);
+    for (const entry of [...pendingBotAssoc]) {
+        const bots = getBotsOnTeam(entry.identity.teamId);
         for (const bot of bots) {
             const botId = mod.GetObjId(bot);
-            // Check if this bot is already associated with an identity
             if (!getBotIdentityByPlayerId(botId)) {
-                associateBotWithIdentity(bot, identity);
-                break; // Found a bot for this identity
+                associateBotWithIdentity(bot, entry.identity);
+                break;
             }
         }
     }
-    pendingBotIdentities = [];
+    pendingBotAssoc = [];
 }
 
 // Undeploy one bot from a team to make room for a human
@@ -391,26 +470,30 @@ function undeployBotForTeam(teamId: number): void {
 // Priority: (1) a human on EACH team "at all cost"; (2) friends stay together
 // -- the engine already groups a party onto one team, so we only intervene for
 // rule 1; (3) balanced team SIZES with bots filling the short side. Teams scale
-// to the human count: 2 humans = 1v1, 3 = 2v2 (+1 bot), up to 4v4.
+// to the human count (floored at MIN_TEAM_SIZE=1, so true 1v1s are allowed):
+// solo = 1 human vs 1 bot, 2 humans = pure 1v1, 3 = 2v2 (+1 bot), up to 4v4.
 // ============================================================================
 
-// Seats per team this round = the larger human count, clamped to [1, PLAYERS_PER_TEAM].
+// Seats per team this round = the larger human count, floored at MIN_TEAM_SIZE,
+// capped at PLAYERS_PER_TEAM. (1v1 spectate safety: a death in a 1v1 is a team
+// wipe -> instant elimination -> the transition widens the spectate pool, so no
+// teammate is ever needed as a target.)
 // DEBUG: force a full lobby so a solo tester gets a real match (bot teammates + enemies).
 function computeTargetTeamSize(): number {
     if (DEBUG_MODE) return DEBUG_TEAM_SIZE;
     const h1 = countHumansOnTeam(1);
     const h2 = countHumansOnTeam(2);
-    return Math.max(1, Math.min(PLAYERS_PER_TEAM, Math.max(h1, h2)));
+    return Math.min(PLAYERS_PER_TEAM, Math.max(MIN_TEAM_SIZE, h1, h2));
 }
 
 // DEBUG: log what the team-sorting WOULD decide for the spec's worked cases, so the human-
 // distribution logic can be sanity-checked solo (real multi-human execution still needs a 2nd client).
 function debugSimulateTeamSorting(): void {
     if (!DEBUG_MODE) return;
-    const size = (h1: number, h2: number) => Math.max(1, Math.min(PLAYERS_PER_TEAM, Math.max(h1, h2)));
+    const size = (h1: number, h2: number) => Math.min(PLAYERS_PER_TEAM, Math.max(MIN_TEAM_SIZE, h1, h2));
     // Each case = the human split the engine+rule-1 would settle on, and the resulting seats/bots.
     const cases = [
-        { label: '2friends', h1: 1, h2: 1 }, // 2 friends -> rule1 splits -> 1v1
+        { label: '2friends', h1: 1, h2: 1 }, // 2 friends -> rule1 splits -> pure 1v1 (no bots)
         { label: '3friends', h1: 2, h2: 1 }, // 3 friends -> split 1 -> 2v2 (+1 bot)
         { label: '3friends+random', h1: 3, h2: 1 }, // random covers rule1 -> 3v3 (+2 bots)
         { label: '4v4', h1: 4, h2: 4 },
@@ -478,6 +561,14 @@ function moveOneHumanToTeam(fromTeamId: number, toTeamId: number): boolean {
         undeployBotForTeam(toTeamId); // make room on the target team (SetTeam needs a free slot)
         mod.UndeployPlayer(pick); // SetTeam requires an undeployed target
         mod.SetTeam(pick, mod.GetTeam(toTeamId));
+        // Explicitly redeploy on the new team. Callers run under AutoSpawn, but the
+        // engine's auto-respawn is not instant/guaranteed after a scripted undeploy —
+        // round 1's startRound() path has NO DeployAllPlayers after this, so without
+        // this the moved player could sit undeployed into the countdown.
+        try {
+            mod.DeployPlayer(pick);
+        } catch {}
+        spec('TEAM-MOVE', `id=${mod.GetObjId(pick)} ${fromTeamId}->${toTeamId} (rule 1 split)`);
         Tlm.event('team.moveHuman', { player: mod.GetObjId(pick), from: fromTeamId, to: toTeamId });
         return true;
     } catch {
@@ -489,17 +580,21 @@ function moveOneHumanToTeam(fromTeamId: number, toTeamId: number): boolean {
 // Ensure rule 1 (a human on each team) with the fewest possible human moves.
 // The engine keeps parties together; we only split when ALL humans are on one team.
 // Bot sizing is done by spawnBackfillBots (computeTargetTeamSize).
-function reconcileTeams(): void {
-    if (!ENABLE_CUSTOM_BOTS) return;
-
+// Returns true if a human was actually moved (caller may want to re-run backfill).
+function reconcileTeams(): boolean {
+    // NOTE: no ENABLE_CUSTOM_BOTS guard — rule 1 (a human on each team) is HUMAN
+    // sorting and matters MORE with bots off (nothing else fills an empty team).
+    // undeployBotForTeam inside the move is a no-op when bots are disabled.
     let h1 = countHumansOnTeam(1);
     let h2 = countHumansOnTeam(2);
+    let moved = false;
 
     // Rule 1: 2+ humans present but a team has none -> move a single human over.
     if (h1 + h2 >= 2 && (h1 === 0 || h2 === 0)) {
         const from = h1 > 0 ? 1 : 2;
         const to = from === 1 ? 2 : 1;
         if (moveOneHumanToTeam(from, to)) {
+            moved = true;
             h1 = countHumansOnTeam(1);
             h2 = countHumansOnTeam(2);
         }
@@ -508,8 +603,9 @@ function reconcileTeams(): void {
     Tlm.event('team.reconcile', {
         h1,
         h2,
-        targetSize: Math.max(1, Math.min(PLAYERS_PER_TEAM, Math.max(h1, h2))),
+        targetSize: Math.min(PLAYERS_PER_TEAM, Math.max(MIN_TEAM_SIZE, h1, h2)),
     });
+    return moved;
 }
 
 // Find closest enemy player to a bot
@@ -618,14 +714,15 @@ function updateBotTargets(): void {
                       : side2SpawnPositions;
             });
 
-            // Set flag urgency getter - urgency increases as overtime progresses
+            // Flag urgency ramp. Overtime IS the emergency — the old ramp started at 0.3
+            // and needed ~8.5s to reach the old 0.7 "everyone pushes" line, so bots spent
+            // most of a 15s overtime treating the flag as optional. Now it opens at 0.55
+            // (already at/above FLAG_URGENCY_ALL_IN: every bot commits the moment the flag
+            // drops) and saturates at 1.0 within ~6s.
             brain.setFlagUrgencyGetter(() => {
                 if (!botFlagActive || botFlagSpawnTime === 0) return 0;
-                // Calculate time since flag spawned
                 const overtimeElapsed = Date.now() - botFlagSpawnTime;
-                const overtimeMax = 15000; // 15 second overtime
-                // Urgency ramps from 0.3 to 1.0 as overtime progresses
-                const urgency = 0.3 + (overtimeElapsed / overtimeMax) * 0.7;
+                const urgency = 0.55 + (overtimeElapsed / 6000) * 0.45;
                 return Math.min(1.0, urgency);
             });
 
@@ -702,6 +799,9 @@ function cleanupForMatchEnd(): void {
 
     // Set spawn mode to auto spawn before ending
     mod.SetSpawnMode(mod.SpawnModes.AutoSpawn);
+    spec('MATCH-END', 'AutoSpawn + force-deploy everyone (carry no spectators into next map)');
+    specState('match-end');
+    specStop(); // final flush + stop tracker timers
 
     // Stop all intervals
     stopBotTargeting();
@@ -1137,33 +1237,157 @@ Events.OnGameModeStarted.subscribe(() => {
     // bug-report, hi-prio, no engine fix known). Whole-team-dead = elimination, which flips
     // to the deploy screen immediately (part 3), so no-target spectate can't occur mid-round.
     mod.SetSpectatingFiltersForAll(mod.SpectatingGroup.Team, false, true);
+    specInit();
+    spec('MODE', 'AutoSpawn (match start)');
+    spec('FILTERS', 'Team (match start)');
 
     // Deploy all players immediately
     mod.DeployAllPlayers();
+    specState('post-mass-deploy');
 });
 
 // SPECTATOR-BUG FIX (part 2): the engine wedges ("waiting for soldier deployment" + cursor
 // lock) when a spectating player has NO valid spectate target. During the round transition we
-// therefore WIDEN the spectate pool to everyone — dead players fall through to the frozen
-// winners behind the round-result overlay (round is decided; no live intel). startRound()
-// restores team-only spectate before play resumes. NOTE: players never see the deploy screen —
-// spawn mode stays Spectating; round start force-deploys via AutoSpawn + DeployAllPlayers.
-function enterRoundTransition(): void {
-    try {
-        mod.SetSpectatingFiltersForAll(mod.SpectatingGroup.All, false, false);
+// WIDEN the spectate pool to everyone, then (BUILD F) immediately force-deploy every dead
+// human WHILE still Spectating (closes their spectator sessions via the engine's own deploy
+// path), hold SpawnModes.Deploy through result screen + countdown, and flip back to
+// Spectating only at round start (countdown end). startRound() restores team-only filters.
+let inRoundTransition = false; // latch: two enders can fire ~1.6s apart (SPEC log:
+// final-elimination then elimination) — widen/flush must only run once per round end.
 
-        // Mutual wipe: NOBODY is alive, so even the widened pool has no target — the one
-        // case spectate cannot be made safe. Force-redeploy everyone (AutoSpawn — no deploy
-        // screen), slightly delayed so the teardown's undeploys settle first; the next
-        // round's countdown then teleports + freezes them into position.
+// BUILD G: the live-round Spectating mode is set DURING the round transition — at the one
+// moment zero spectator sessions exist (everyone just force-deployed). The countdown-end
+// call is only the round-1 fallback (match start has no spectate history, so that flip is
+// safe). Guarded so Spectating is never re-set when it's already the active mode.
+let liveSpawnModeSet = false;
+export function ensureLiveSpawnMode(where: string): void {
+    if (liveSpawnModeSet) {
+        spec('MODE', `already live mode (${where}; no SetSpawnMode)`);
+        return;
+    }
+    liveSpawnModeSet = true;
+    mod.SetSpawnMode(LIVE_SPECTATE ? mod.SpawnModes.Spectating : mod.SpawnModes.Deploy);
+    spec('MODE', `${LIVE_SPECTATE ? 'Spectating' : 'Deploy'} (live; set at ${where})`);
+}
+
+// The +5s next-round timer flips sidesSwapped every 3rd round BEFORE deployment; revives
+// land during the win/loss window (before that flip), so compute the NEXT round's sides.
+function nextRoundSidesSwapped(): boolean {
+    const nextRound = roundNumber + 1;
+    return nextRound > 1 && (nextRound - 1) % 3 === 0 ? !sidesSwapped : sidesSwapped;
+}
+
+// After the mode flips back to Spectating, stand EVERYONE on their round-start side
+// (interim placement — the countdown re-teleports precisely with facing). `swapped` is
+// passed in because callers run both before and after the sidesSwapped flip.
+function teleportAllToSeats(swapped: boolean): void {
+    try {
+        for (const teamId of [1, 2]) {
+            const positions =
+                teamId === 1
+                    ? swapped ? side2SpawnPositions : side1SpawnPositions
+                    : swapped ? side1SpawnPositions : side2SpawnPositions;
+            if (positions.length === 0) continue;
+            let seat = 0;
+            for (const p of getPlayersOnTeam(teamId)) {
+                try {
+                    if (!mod.IsPlayerValid(p)) continue;
+                    if (!mod.GetSoldierState(p, mod.SoldierStateBool.IsAlive)) continue;
+                    mod.Teleport(p, positions[seat % positions.length], 0);
+                    seat++;
+                } catch {}
+            }
+        }
+        spec('SEATS', `all players teleported to round-start sides (swapped=${swapped})`);
+    } catch {}
+}
+
+// BUILD H (transition polish): the full revive dance, run AFTER the win/loss card has
+// played out (or early on a mutual wipe): SetSpawnMode(Deploy) -> spam force-deploys
+// every 300ms until every human reads alive (3s cap) -> SetSpawnMode(Spectating) at the
+// one moment ZERO spectator sessions exist -> teleport EVERYONE (winners included) to
+// their round-start seats -> onDone (countdown flow). The proven anti-lock invariant is
+// unchanged: Spectating is only ever set while everyone is deployed.
+function reviveSequence(swapped: boolean, onDone: () => void): void {
+    liveSpawnModeSet = false;
+    mod.SetSpawnMode(mod.SpawnModes.Deploy);
+    spec('MODE', 'Deploy (post-card revive; deploys land through the normal Deploy path)');
+    for (const p of [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)]) {
+        try {
+            if (!mod.IsPlayerValid(p)) continue;
+            if (mod.GetSoldierState(p, mod.SoldierStateBool.IsAISoldier)) continue;
+            if (mod.GetSoldierState(p, mod.SoldierStateBool.IsAlive)) continue;
+            mod.DeployPlayer(p);
+            spec('REVIVE', `id=${mod.GetObjId(p)} (force-deploy under Deploy mode)`);
+        } catch {}
+    }
+    let reviveChecks = 0;
+    const reviveTimer = Timers.setInterval(() => {
+        try {
+            if (matchEnding) {
+                Timers.clearInterval(reviveTimer);
+                return;
+            }
+            reviveChecks++;
+            let stillDead = 0;
+            for (const p of [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)]) {
+                try {
+                    if (!mod.IsPlayerValid(p)) continue;
+                    if (mod.GetSoldierState(p, mod.SoldierStateBool.IsAISoldier)) continue;
+                    if (!mod.GetSoldierState(p, mod.SoldierStateBool.IsAlive)) {
+                        stillDead++;
+                        mod.DeployPlayer(p);
+                        spec('REVIVE-RETRY', `id=${mod.GetObjId(p)} (spam #${reviveChecks})`);
+                    }
+                } catch {}
+            }
+            if (stillDead === 0 || reviveChecks >= 10) {
+                Timers.clearInterval(reviveTimer);
+                spec(
+                    'REVIVES-DONE',
+                    `allDeployed=${stillDead === 0} after ${reviveChecks} check${reviveChecks === 1 ? '' : 's'}`
+                );
+                ensureLiveSpawnMode('post-card all-deployed');
+                teleportAllToSeats(swapped);
+                onDone();
+            }
+        } catch {}
+    }, 300);
+}
+
+function enterRoundTransition(reason: string = '?'): void {
+    if (inRoundTransition) {
+        spec('TRANSITION-DUP', `reason=${reason} (already transitioning, skipped)`);
+        return;
+    }
+    inRoundTransition = true;
+    try {
+        spec('TRANSITION', `reason=${reason} widen=All`);
+        specState('pre-transition');
+        mod.SetSpectatingFiltersForAll(mod.SpectatingGroup.All, false, false);
+        spec('FILTERS', 'All (transition)');
+        specFlush(`transition:${reason}`);
+
+        // BUILD H (user-directed choreography): at round end,
+        //   The win/loss card plays out FIRST with the dead spectating the frozen winners
+        //   (mode stays Spectating, pool widened to All). The revive dance — Deploy mode,
+        //   force-deploy spam, Spectating re-set with everyone alive, teleport to seats —
+        //   runs AFTER the card, in the +5s next-round flow (reviveSequence). NOTHING may
+        //   undeploy players once roundEnding is set (teardown undeploy removed; blocker
+        //   inactive) — dead players simply spectate until the post-card revive.
+
+        // Mutual wipe: NOBODY is alive, so even the widened pool has no target and the
+        // card would wedge every spectator. Can't wait for the card — run the revive
+        // sequence EARLY (+600ms, letting the final kill resolve). The +5s flow's own
+        // reviveSequence then re-runs as a fast no-op (everyone already alive).
         const anyAlive = getAlivePlayersOnTeam(1).length + getAlivePlayersOnTeam(2).length > 0;
         if (!anyAlive) {
-            adminDebugTool?.dynamicLog('Round transition: mutual wipe -> force redeploy (AutoSpawn)');
+            adminDebugTool?.dynamicLog('Round transition: mutual wipe -> early reviveSequence');
             Timers.setTimeout(() => {
                 try {
                     if (matchEnding) return;
-                    mod.SetSpawnMode(mod.SpawnModes.AutoSpawn);
-                    mod.DeployAllPlayers();
+                    spec('MUTUAL-WIPE', 'early reviveSequence (no card spectate targets)');
+                    reviveSequence(nextRoundSidesSwapped(), () => {});
                 } catch {}
             }, 600);
             Timers.setTimeout(() => {
@@ -1205,10 +1429,23 @@ function finishRound(isDraw: boolean, winningTeam: number, showResult: () => voi
                 }
                 alivePlayers.push(player);
             } else {
-                mod.UndeployPlayer(player);
+                // BUILD H: dead players are left completely alone through the win/loss card —
+                // no undeploy (leaks state), no deploy (they'd pop up mid-card). They spectate
+                // the frozen winners (pool=All) and get revived by the post-card
+                // reviveSequence. Dead bots unspawn via their spawner ~2s after death.
             }
         } catch {}
     }
+
+    // Re-apply the widened spectate pool AT the moment the teardown undeploys land. Build A
+    // did this by accident (its duplicate enterRoundTransition re-ran the widen ~1.6s after
+    // the first, same tick as these undeploys) and its dead-then-undeployed players never
+    // caught the sticky spectator lock; the transition latch removed that second widen in
+    // builds B/C. Deterministic replacement — a filters call refreshes session targets.
+    try {
+        mod.SetSpectatingFiltersForAll(mod.SpectatingGroup.All, false, false);
+        spec('FILTERS', 'All (re-widen at teardown)');
+    } catch {}
 
     // Freeze all alive players (input restrictions for humans)
     if (alivePlayers.length > 0) {
@@ -1254,12 +1491,18 @@ function finishRound(isDraw: boolean, winningTeam: number, showResult: () => voi
             adminDebugTool?.dynamicLog(`Sides swapped before deploy! sidesSwapped=${sidesSwapped}`);
             playVO(mod.VoiceOverEvents2D.RoundSwitchSides);
         }
-        deployAllAtStartPositions(() => {
-            const allPlayersNow = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
-            countdownUI?.freezeAllPlayers(allPlayersNow);
-            Timers.setTimeout(() => {
-                resetRound();
-            }, 500);
+        // BUILD H: the win/loss card has fully played out by now. Run the revive dance
+        // (Deploy mode -> force-deploy spam -> everyone alive -> Spectating -> teleport to
+        // seats), and only THEN continue into the countdown flow. sidesSwapped has already
+        // flipped above, so pass the current value.
+        reviveSequence(sidesSwapped, () => {
+            deployAllAtStartPositions(() => {
+                const allPlayersNow = [...getPlayersOnTeam(1), ...getPlayersOnTeam(2)];
+                countdownUI?.freezeAllPlayers(allPlayersNow);
+                Timers.setTimeout(() => {
+                    resetRound();
+                }, 500);
+            });
         });
     }, 5000);
 }
@@ -1268,7 +1511,7 @@ function finishRound(isDraw: boolean, winningTeam: number, showResult: () => voi
 function handleFlagCapture(teamId: number): void {
     if (roundEnding) return;
     roundEnding = true;
-    enterRoundTransition();
+    enterRoundTransition('flag-capture');
 
     adminDebugTool?.dynamicLog(`Team ${teamId} captured the flag!`);
 
@@ -1521,6 +1764,14 @@ function stopTelemetry(player: mod.Player): void {
 }
 
 function handlePlayerDeployed(player: mod.Player): void {
+    specDeploy(player); // tracks id/team/latency-since-death for EVERY deploy (incl. blocked ones)
+    // Bind bots to their roster identity by spawn position the moment they materialize —
+    // they are standing AT their own spawner right now (see pendingBotAssoc).
+    try {
+        if (mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) {
+            associateBotByPosition(player);
+        }
+    } catch {}
     // Match is ending: endMatchDeployed() force-deploys everyone so the next map
     // loads cleanly and nobody is stuck spectating. Do NO round logic in that state.
     if (matchEnding) return;
@@ -1536,9 +1787,13 @@ function handlePlayerDeployed(player: mod.Player): void {
     // the next round; rejecting it here undeploys the player and flashes them into spectator.
     if (roundStarted && countdownUI && !countdownUI.isRunning && !roundEnding) {
         adminDebugTool?.dynamicLog(`Blocking mid-round spawn for player ${playerId}`);
+        spec('DEPLOY-BLOCK', `id=${playerId} (mid-round) -> undeploy into spectate`);
         rejectPlayer(playerId); // Mark as rejected to exclude from health calculations
         try {
+            // BUILD F: reverted to the undeploy method (user-directed). The round-end
+            // revive pass (deploy under Spectating) is what closes spectator sessions now.
             mod.UndeployPlayer(player);
+            specUndeploy(playerId, 'mid-round-block');
         } catch (e) {
             // Player might be invalid
         }
@@ -1598,11 +1853,34 @@ function handlePlayerDeployed(player: mod.Player): void {
         // Late-deploying player during countdown - apply restrictions and loadout
         adminDebugTool?.dynamicLog(`Late deploy during countdown - applying loadout to player ${playerId}`);
         countdownUI.addLatePlayer(player, currentLoadout);
+        // TEAM-SPLIT FIX: a human connecting during the countdown (common in round 1 —
+        // the engine seats them next to the other human) must still be rule-1 split.
+        // If they ARE the one moved, their redeploy re-enters this branch on the right
+        // team (counts then balanced -> no second move). Re-backfill so bot counts
+        // match the possibly-grown target team size.
+        try {
+            if (!mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) {
+                if (reconcileTeams()) {
+                    spawnBackfillBots();
+                    freezeBots();
+                }
+            }
+        } catch {}
     } else if (roundStarted && !roundEnding) {
         // Player deployed during the waiting period before countdown starts
         // Freeze them immediately - they'll be processed when countdown starts
         adminDebugTool?.dynamicLog(`Player ${playerId} deployed during pre-countdown wait - freezing`);
         freezePlayer(player);
+    } else if (roundEnding) {
+        // BUILD G: a force-revived player's deploy just landed mid win/loss screen. Give
+        // them the survivor treatment (heal/disarm/freeze). Positioning happens in one
+        // pass for EVERYONE (teleportAllToSeats) after the Spectating flip.
+        try {
+            mod.Heal(player, 1000);
+            removeAllEquipment(player);
+            freezePlayer(player);
+            spec('REVIVE-LANDED', `id=${playerId} team=${mod.GetObjId(mod.GetTeam(player))}`);
+        } catch {}
     }
 }
 
@@ -1619,13 +1897,16 @@ function startRound(): void {
     // Clear any rejected players from previous round
     clearRejectedPlayers();
 
-    // Reset round ending flag
+    // Reset round ending flag (+ the transition latch so the next round end can widen again)
     roundEnding = false;
+    inRoundTransition = false;
 
     // SPECTATOR-BUG FIX: restore team-only spectate for live play (transition widened it to
     // All so dead players always had a target; live rounds must never show the enemy team).
     try {
         mod.SetSpectatingFiltersForAll(mod.SpectatingGroup.Team, false, true);
+        spec('FILTERS', `Team (round-start #${roundNumber + 1})`);
+        specState('round-start');
     } catch {}
 
     // Initialize spawn positions from spatial objects
@@ -1641,6 +1922,12 @@ function startRound(): void {
             playerHealth.set(mod.GetObjId(p), 100);
         } catch {}
     }
+
+    // TEAM-SPLIT FIX: rule 1 must run HERE too. OnGameModeStarted reconciles before
+    // players have even connected on a hosted server, and deployAllAtStartPositions
+    // only covers round 2+ — so round 1 previously played with 2 joiners stuck on the
+    // SAME team (the engine seats them together) instead of splitting into a 1v1.
+    reconcileTeams();
 
     // Spawn backfill bots to fill empty slots
     if (ENABLE_CUSTOM_BOTS) {
@@ -1770,7 +2057,7 @@ function handleRoundTimeEnd(): void {
 
     // Trigger round end
     roundEnding = true;
-    enterRoundTransition();
+    enterRoundTransition('time-out');
 
     if (isHealthTied) {
         adminDebugTool?.dynamicLog('Health tied - round draw!');
@@ -1853,7 +2140,7 @@ function checkRoundEnd(): void {
             team2Alive: team2Alive.length,
         });
         roundEnding = true;
-        enterRoundTransition();
+        enterRoundTransition('elimination');
 
         // Check for mutual elimination (both teams wiped out at the same time)
         const isMutualElimination = team1Alive.length === 0 && team2Alive.length === 0;
@@ -1881,8 +2168,14 @@ function deployAllAtStartPositions(callback: () => void): void {
     // Don't deploy if match is ending
     if (matchEnding) return;
 
-    // Set spawn mode, reconcile teams (rule 1 + backfill leavers next round), then deploy.
-    mod.SetSpawnMode(mod.SpawnModes.AutoSpawn);
+    // BUILD G: do NOT touch the spawn mode here — the transition already flipped back to
+    // Spectating once everyone was deployed, and that setting must survive untouched into
+    // the live round. DeployAllPlayers below is only a catch-all for stragglers.
+    spec('MODE', 'inherited (round-transition catch-all mass-deploy; no SetSpawnMode)');
+    // NOTE: deliberately NO per-player deploy-state loop here. Builds B/C ran a
+    // SetRedeployTime/EnablePlayerDeploy loop over everyone at this point — touching the
+    // still-spectating dead — and the sticky spectator lock spiked to near-every-round.
+    // Build A (dead untouched) was clean for everyone who wasn't undeploy-cycled.
     reconcileTeams();
     mod.DeployAllPlayers();
 
@@ -1958,7 +2251,7 @@ function handlePlayerDeath(eventPlayer: mod.Player): void {
         // with (potentially) nobody on their team left to watch — the exact engine-wedge
         // trigger. Widen the spectate pool NOW (and handle mutual wipes) so a target exists
         // by the time spectate engages; checkRoundEnd's teardown follows after the animation.
-        enterRoundTransition();
+        enterRoundTransition('final-elimination');
 
         // Delay round end check to allow final elimination animation to play
         // Animation takes ~1600ms (shrink 200 + delay 300 + hold 800 + fade 300)
@@ -1975,8 +2268,19 @@ function handlePlayerDeath(eventPlayer: mod.Player): void {
 Events.OnPlayerDied.subscribe((eventPlayer: mod.Player) => {
     _playerDeaths++;
     const playerId = mod.GetObjId(eventPlayer);
+    specDeath(eventPlayer, 'died');
     logMain('OnPlayerDied', { playerId, totalDeaths: _playerDeaths });
     adminDebugTool?.dynamicLog('OnPlayerDied event fired');
+
+    // SPECTATOR-BUG law (3-build A/B/C comparison, 2026-07-20 SPEC logs): a dead player
+    // in death-spectate must NOT be touched by any deploy-state API. Build A (untouched
+    // dead) had the bug ONLY for a player caught in the blocker's undeploy cycle; builds
+    // B (EnablePlayerDeploy(false) on death + unlock loop) and C (SetRedeployTime on
+    // death + reset loop) both locked a human into the sticky "waiting for soldier
+    // deployment" spectator UI almost every round. So: on death we do NOTHING to the
+    // player; the one remaining leak (player-pressed mid-round respawn) is handled by
+    // the deploy blocker with an engine-native Kill instead of UndeployPlayer.
+
     handlePlayerDeath(eventPlayer);
 
     // Reset bot brain on death (clear memory for respawn)
@@ -1993,6 +2297,7 @@ Events.OnPlayerDied.subscribe((eventPlayer: mod.Player) => {
 
 Events.OnMandown.subscribe((eventPlayer: mod.Player) => {
     adminDebugTool?.dynamicLog('OnMandown event fired');
+    specDeath(eventPlayer, 'mandown');
     handlePlayerDeath(eventPlayer);
 
     // SPECTATOR-BUG FIX (part 4): the old 2s DeployPlayer->UndeployPlayer "spectator kick"
@@ -2214,9 +2519,24 @@ Events.OnPlayerDeployed.subscribe(showTelemetry);
 Events.OnPlayerUndeploy.subscribe(stopTelemetry);
 Events.OnPlayerLeaveGame.subscribe(destroyAdminDebugTool);
 
+// SPEC-TRACK: joins/leaves are the W1 window (late joiner mid-round onto a dead/empty
+// team never deploys under Spectating and may have an EMPTY team-only spectate pool).
+Events.OnPlayerJoinGame.subscribe((eventPlayer: mod.Player) => {
+    let id = -1;
+    try { id = mod.GetObjId(eventPlayer); } catch {}
+    spec('JOIN', `id=${id} roundStarted=${roundStarted} roundEnding=${roundEnding} countdown=${countdownUI?.isRunning ?? false}`);
+    specState('post-join');
+});
+
 // Play leave sound when a human player leaves (not bots)
 Events.OnPlayerLeaveGame.subscribe((playerId: number) => {
+    spec('LEAVE', `id=${playerId} roundStarted=${roundStarted} roundEnding=${roundEnding}`);
     knownHumanIds.delete(playerId);
+    // Every bot LEAVES ~2s after it dies (spawner unspawn), so this is the only place a
+    // departed bot's brain can be freed — removeBotBrain(player) needs a live player
+    // object that no longer resolves. Without it, brains piled up all match and
+    // tickAllBotBrains iterated every dead one on every tick.
+    removeBotBrainById(playerId);
     // Skip sound for bots
     if (knownBotIds.has(playerId)) {
         knownBotIds.delete(playerId); // Clean up tracking
